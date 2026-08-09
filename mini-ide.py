@@ -1202,11 +1202,31 @@ class MiniIDE(Gtk.Window):
         self.hb.set_title(os.path.basename(self.root))
         self.hb.pack_start(btn_openfolder)
         self.hb.pack_start(self.btn_multitask)
+        self.btn_power = Gtk.Button(label="Perfil: …")
+        self.btn_power.set_tooltip_text("Cambiar perfil de energía (máximo/medio/mínimo)")
+        self.btn_power.connect("clicked", self.cycle_power)
+        self.hb.pack_start(self.btn_power)
         self.set_titlebar(self.hb)
 
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
         save_recents(self.root)
+        GLib.timeout_add(1000, self.refresh_power_label)
+
+    def cycle_power(self, btn=None):
+        subprocess.Popen(["sudo", os.path.expanduser("~/.local/bin/limit-cpu.sh"), "cycle"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        GLib.timeout_add(700, self.refresh_power_label)
+
+    def refresh_power_label(self):
+        try:
+            epp = open("/sys/devices/system/cpu/cpufreq/policy0/energy_performance_preference").read().strip()
+            self.btn_power.set_label({"balance_performance": "Perfil: máximo",
+                                      "balance_power": "Perfil: medio",
+                                      "power": "Perfil: mínimo"}.get(epp, epp))
+        except Exception:
+            self.btn_power.set_label("Perfil: ?")
+        return False
 
     # ---------------- multitarea ----------------
     def on_multitask_click(self, btn):
