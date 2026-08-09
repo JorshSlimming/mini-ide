@@ -399,6 +399,12 @@ class ProjectPanel(Gtk.Box):
         item = Gtk.MenuItem(label="Pegar")
         item.connect("activate", lambda w: self.term_paste(term))
         menu.append(item)
+        if term is self.opencode_term:
+            sep = Gtk.SeparatorMenuItem()
+            menu.append(sep)
+            hint = Gtk.MenuItem(label="Seleccionar texto: mantén Shift")
+            hint.set_sensitive(False)
+            menu.append(hint)
         menu.show_all()
         try:
             menu.popup_at_pointer(ev)
