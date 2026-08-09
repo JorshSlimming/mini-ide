@@ -42,7 +42,7 @@ Multiple instances can be opened (each folder in its own window).
 - File management: rename (F2), delete (Del), create in-place with Enter/Esc
 - Drag & drop from the system file manager → copies to the destination folder
 - Material Icon Theme icons with the exact mappings from the VS Code extension
-- VS Code Dark Modern palette
+- VS Code Dark 2026 palette (matching your VS Code theme)
 
 ## Shortcuts
 

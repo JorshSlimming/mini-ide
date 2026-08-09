@@ -28,7 +28,7 @@ FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
 OPENCODE = shutil.which("opencode") or os.environ.get("MINI_IDE_OPENCODE") or os.path.expanduser("~/.opencode/bin/opencode")
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
-RECENT_FILE = os.path.expanduser("~/.config/mini-ide/recent.json")
+RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
 MAX_PROJECTS = 3
 
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "avif"}
@@ -37,33 +37,38 @@ CSV_EXT = {"csv", "tsv"}
 CSV_COLORS = ["#2E5E3E", "#1F4E6E", "#5E5E1F", "#6E3E1F", "#4A2E6E"]
 
 VSC_CSS = b"""
-window { background-color: #1F1F1F; }
-box, paned, scrolledwindow, notebook { background-color: #1F1F1F; }
-headerbar { background-color: #3C3C3C; min-height: 0px; padding: 1px 3px; }
-headerbar:backdrop { background-color: #3C3C3C; }
-headerbar button { background-color: #3C3C3C; color: #CCCCCC; border-color: #505050; min-height: 16px; min-width: 22px; padding: 0px 4px; }
-headerbar button:hover { background-color: #505050; }
-headerbar button:backdrop { background-color: #3C3C3C; color: #CCCCCC; }
-headerbar label, headerbar .title, headerbar .subtitle, headerbar button label { color: #CCCCCC; font-size: 13px; text-shadow: none; }
+window { background-color: #121314; }
+box, paned, scrolledwindow, notebook { background-color: #121314; }
+headerbar { background-color: #191A1B; min-height: 0px; padding: 1px 3px; }
+headerbar:backdrop { background-color: #191A1B; }
+headerbar button { background-color: #191A1B; color: #BFBFBF; border-color: #2A2B2C; min-height: 16px; min-width: 22px; padding: 0px 4px; }
+headerbar button:hover { background-color: rgba(255,255,255,0.08); border-color: #2A2B2C; }
+headerbar button:backdrop { background-color: #191A1B; color: #BFBFBF; }
+headerbar label, headerbar .title, headerbar .subtitle, headerbar button label { color: #8C8C8C; font-size: 13px; text-shadow: none; }
 headerbar .title { background-color: transparent; }
-headerbar button.titlebutton, headerbar button.titlebutton label { color: #CCCCCC; background-color: transparent; }
-headerbar button.titlebutton:hover { background-color: #505050; }
-treeview { background-color: #252526; color: #CCCCCC; }
-treeview:selected { background-color: #094771; color: #FFFFFF; }
-treeview:selected:backdrop { background-color: #37373D; }
-treeview.view { border-color: #252526; }
-paned > separator { background-color: #333333; }
-button { color: #CCCCCC; background-color: #3C3C3C; }
-button:hover { background-color: #505050; }
-entry { background-color: #3C3C3C; color: #CCCCCC; }
-scale trough { background-color: #3C3C3C; }
-.dim-label { color: #969696; }
-label { color: #CCCCCC; }
-notebook tab, notebook tab label { color: #CCCCCC; }
-notebook tab:active, notebook tab:checked { background-color: #252526; color: #FFFFFF; }
+headerbar button.titlebutton, headerbar button.titlebutton label { color: #8C8C8C; background-color: transparent; }
+headerbar button.titlebutton:hover { background-color: rgba(255,255,255,0.08); }
+treeview { background-color: #191A1B; color: #BFBFBF; }
+treeview:hover { background-color: rgba(255,255,255,0.08); }
+treeview:selected { background-color: rgba(255,255,255,0.13); color: #EDEDED; }
+treeview:selected:backdrop { background-color: #2C2D2E; color: #BFBFBF; }
+treeview.view { border-color: #191A1B; }
+paned > separator { background-color: #2A2B2C; }
+button { color: #BFBFBF; background-color: #191A1B; border-color: #2A2B2C; }
+button:hover { background-color: rgba(255,255,255,0.08); }
+entry { background-color: #191A1B; color: #BFBFBF; border-color: #333536; }
+scale trough { background-color: #2A2B2C; }
+.dim-label { color: #8C8C8C; }
+label { color: #BFBFBF; }
+notebook { background-color: #191A1B; }
+notebook header { background-color: #191A1B; border-color: #2A2B2C; }
+notebook tab { background-color: #191A1B; }
+notebook tab label { color: #8C8C8C; }
+notebook tab:active, notebook tab:checked { background-color: #121314; }
+notebook tab:active label, notebook tab:checked label { color: #BFBFBF; }
 label, button, headerbar, notebook, treeview { text-shadow: none; -gtk-icon-shadow: none; }
-.root-drop { border: 2px dashed #5B8DFF; background-color: #2A2A2A; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
-.root-drop:hover { background-color: #1E3A5F; }
+.root-drop { border: 2px dashed #3994BC; background-color: #191A1B; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
+.root-drop:hover { background-color: rgba(57,148,188,0.2); }
 """
 
 THEME_JSON = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/dist/material-icons.json")
@@ -395,8 +400,8 @@ class ProjectPanel(Gtk.Box):
         term = Vte.Terminal()
         term.set_font(Pango.FontDescription("Monospace 10"))
         try:
-            fg = Gdk.RGBA(); fg.parse("#CCCCCC")
-            bg = Gdk.RGBA(); bg.parse("#1E1E1E")
+            fg = Gdk.RGBA(); fg.parse("#BBBEBF")
+            bg = Gdk.RGBA(); bg.parse("#191A1B")
             term.set_color_foreground(fg)
             term.set_color_background(bg)
         except Exception:
