@@ -151,6 +151,7 @@ class ProjectPanel(Gtk.Box):
         self.buf_path = {}
         self.players = []
         self.opencode_pid = None
+        self._compact_tabbed = False
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -216,10 +217,22 @@ class ProjectPanel(Gtk.Box):
         btn_newfolder.set_tooltip_text("Nueva carpeta")
         btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
 
+        btn_term = Gtk.ToggleButton()
+        icon = load_icon("terminal") or themed_icon("terminal")
+        if icon:
+            btn_term.set_image(Gtk.Image.new_from_pixbuf(icon))
+        else:
+            btn_term.set_label("Term")
+        btn_term.set_tooltip_text("Mostrar/ocultar terminal")
+        btn_term.set_active(True)
+        btn_term.connect("toggled", self.toggle_terminal)
+        self.btn_term = btn_term
+
         self.path_lbl = Gtk.Label(xalign=0)
         self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>" % self.root)
         self.tree_bar = Gtk.Box(spacing=4)
         self.tree_bar.pack_start(self.path_lbl, True, True, 6)
+        self.tree_bar.pack_end(btn_term, False, False, 0)
         self.tree_bar.pack_end(btn_newfolder, False, False, 0)
         self.tree_bar.pack_end(btn_newfile, False, False, 0)
         self.tree_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -234,6 +247,7 @@ class ProjectPanel(Gtk.Box):
     # ---------------- layout ----------------
     def set_layout(self, layout):
         self.layout = layout
+        self._compact_tabbed = False
         for ch in list(self.get_children()):
             self.remove(ch)
         # despegar widgets compartidos de sus contenedores viejos
@@ -299,6 +313,76 @@ class ProjectPanel(Gtk.Box):
         except Exception:
             pass
         return False
+
+    # ---------------- visibilidad editor/terminal ----------------
+    def _apply_editor_visibility(self):
+        if self.ed_tabs.get_n_pages() == 0:
+            self.editor_pane.hide()
+        else:
+            self.editor_pane.show()
+
+    def _term_visible(self):
+        if self.layout == "compact" and self._compact_tabbed:
+            return self.opencode_term.get_parent() is self.ed_tabs
+        return self.opencode_term.get_visible()
+
+    def toggle_terminal(self, btn):
+        if self._compact_tabbed:
+            if btn.get_active():
+                if self.opencode_term.get_parent() is not self.ed_tabs:
+                    self.ed_tabs.append_page(self.opencode_term, Gtk.Label("OpenCode"))
+                    self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.opencode_term))
+                    self.ed_tabs.show_all()
+            else:
+                if self.opencode_term.get_parent() is self.ed_tabs:
+                    self.ed_tabs.remove_page(self.ed_tabs.page_num(self.opencode_term))
+            return
+        if btn.get_active():
+            self.opencode_term.show()
+            GLib.idle_add(self._resplit_term)
+        else:
+            self.opencode_term.hide()
+            GLib.idle_add(self._collapse_term)
+
+    def _resplit_term(self):
+        try:
+            if self.editor_pane.get_visible():
+                self.top_h.set_position(self.top_h.get_allocated_width() // 2)
+            else:
+                self.top_h.set_position(self.top_h.get_allocated_width())
+        except Exception:
+            pass
+        return False
+
+    def _collapse_term(self):
+        try:
+            self.top_h.set_position(self.top_h.get_allocated_width())
+        except Exception:
+            pass
+        return False
+
+    def update_compact(self):
+        if self.layout != "compact":
+            return
+        n = len(self.open_widgets)
+        if n >= 2 and not self._compact_tabbed:
+            self._compact_tabbed = True
+            self.top_h.remove(self.opencode_term)
+            if self.opencode_term.get_parent() is None:
+                self.opencode_term.show()
+                self.ed_tabs.append_page(self.opencode_term, Gtk.Label("OpenCode"))
+                self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.opencode_term))
+                self.ed_tabs.show_all()
+            self.btn_term.set_active(True)
+            self.btn_term.set_sensitive(False)
+            GLib.idle_add(self._collapse_term)
+        elif n < 2 and self._compact_tabbed:
+            self._compact_tabbed = False
+            self.ed_tabs.remove_page(self.ed_tabs.page_num(self.opencode_term))
+            self.top_h.pack2(self.opencode_term, True, False)
+            self.top_h.show_all()
+            self.btn_term.set_sensitive(True)
+            self._apply_editor_visibility()
 
     # ---------------- terminales ----------------
     def make_terminal(self):
@@ -694,7 +778,9 @@ class ProjectPanel(Gtk.Box):
         self.open_widgets[fpath] = content_widget
         self.ed_tabs.append_page(widget, tab)
         self.ed_tabs.set_current_page(self.ed_tabs.page_num(widget))
-        self.editor_pane.show_all()
+        self.editor_pane.show()
+        self._apply_editor_visibility()
+        self.update_compact()
 
     def open_text(self, fpath):
         if fpath in self.ed_paths:
@@ -942,11 +1028,13 @@ class ProjectPanel(Gtk.Box):
         entry = self.ed_paths.pop(fpath, None)
         if entry:
             self.buf_path.pop(entry[0], None)
-        if self.ed_tabs.get_n_pages() == 0:
-            self.editor_pane.hide()
+        self._apply_editor_visibility()
+        self.update_compact()
 
     def on_top_alloc(self, paned, alloc):
-        if self.editor_pane.get_visible():
+        if self.layout == "compact" and self._compact_tabbed:
+            return
+        if self.editor_pane.get_visible() and self._term_visible():
             half = alloc.width // 2
             if abs(paned.get_position() - half) > 30:
                 paned.set_position(half)
@@ -1125,6 +1213,7 @@ class MiniIDE(Gtk.Window):
             parent.remove(self.main_panel)
         self.content.pack_start(self.main_panel, True, True, 0)
         self.content.show_all()
+        self.main_panel._apply_editor_visibility()
 
     def make_empty_slot(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -1211,6 +1300,8 @@ class MiniIDE(Gtk.Window):
         self._mt_container = container
         self.content.pack_start(container, True, True, 0)
         self.content.show_all()
+        for p in self.panels:
+            p._apply_editor_visibility()
         self.set_title("Multitarea — %d proyecto%s" % (len(self.panels), "s" if len(self.panels) > 1 else ""))
         GLib.idle_add(self._mt_sizes)
 
@@ -1254,12 +1345,22 @@ class MiniIDE(Gtk.Window):
 
 if __name__ == "__main__":
     folder = FOLDER
-    if folder == "--last":
+    if len(sys.argv) <= 1 or folder == "--last":
         try:
             rec = json.load(open(RECENT_FILE))
-            folder = rec[0] if rec else os.getcwd()
+            folder = rec[0] if rec else None
         except Exception:
-            folder = os.getcwd()
+            folder = None
+    if not folder:
+        dlg = Gtk.FileChooserDialog(title="Selecciona un proyecto",
+                                    action=Gtk.FileChooserAction.SELECT_FOLDER)
+        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                        Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
+        if dlg.run() == Gtk.ResponseType.OK:
+            folder = dlg.get_filename()
+        dlg.destroy()
+    if not folder:
+        sys.exit(0)
     win = MiniIDE(folder)
     win.connect("destroy", Gtk.main_quit)
     win.show_all()
