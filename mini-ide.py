@@ -374,7 +374,37 @@ class ProjectPanel(Gtk.Box):
         except Exception:
             pass
         term.connect("selection-changed", self.on_term_selection)
+        term.connect("key-press-event", self.on_term_key)
+        term.connect("button-press-event", self.on_term_btn)
         return term
+
+    def on_term_key(self, term, ev):
+        if (ev.state & Gdk.ModifierType.CONTROL_MASK
+                and Gdk.keyval_name(ev.keyval) == 'v'):
+            self.term_paste(term)
+            return True
+        return False
+
+    def term_paste(self, term):
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).request_text(
+            lambda clip, text: term.feed_child(text.encode("utf-8")) if text else None)
+
+    def on_term_btn(self, term, ev):
+        if ev.button != 3:
+            return False
+        menu = Gtk.Menu()
+        item = Gtk.MenuItem(label="Copiar")
+        item.connect("activate", lambda w: term.copy_clipboard())
+        menu.append(item)
+        item = Gtk.MenuItem(label="Pegar")
+        item.connect("activate", lambda w: self.term_paste(term))
+        menu.append(item)
+        menu.show_all()
+        try:
+            menu.popup_at_pointer(ev)
+        except Exception:
+            pass
+        return True
 
     def spawn_opencode(self):
         try:
