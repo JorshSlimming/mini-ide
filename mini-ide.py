@@ -54,6 +54,8 @@ entry { background-color: #3C3C3C; color: #CCCCCC; }
 scale trough { background-color: #3C3C3C; }
 .dim-label { color: #969696; }
 label { color: #CCCCCC; }
+.root-drop { border: 1px dashed #5B8DFF; background-color: #2A2A2A; padding: 3px 8px; border-radius: 4px; margin: 2px 4px; }
+.root-drop:hover { background-color: #1E3A5F; }
 """
 
 THEME_JSON = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/dist/material-icons.json")
@@ -235,8 +237,25 @@ class ProjectPanel(Gtk.Box):
         self.tree_bar.pack_end(btn_term, False, False, 0)
         self.tree_bar.pack_end(btn_newfolder, False, False, 0)
         self.tree_bar.pack_end(btn_newfile, False, False, 0)
+
+        self.root_drop = Gtk.Box(spacing=6)
+        self.root_drop.get_style_context().add_class("root-drop")
+        ico = load_icon("folder") or load_icon("folder-open")
+        if ico:
+            self.root_drop.pack_start(Gtk.Image.new_from_pixbuf(ico), False, False, 0)
+        drop_lbl = Gtk.Label(xalign=0)
+        drop_lbl.set_markup("<span size='small'>Suelta aquí para copiar a la raíz</span>")
+        self.root_drop.pack_start(drop_lbl, False, False, 0)
+        self.root_drop.drag_dest_set(Gtk.DestDefaults.ALL,
+                                     [Gtk.TargetEntry.new("text/uri-list", 0, 80)],
+                                     Gdk.DragAction.COPY)
+        self.root_drop.connect("drag-data-received", self.on_root_drop)
+        self.root_drop.set_no_show_all(True)
+        self.root_drop.set_visible(False)
+
         self.tree_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.tree_box.pack_start(self.tree_bar, False, False, 3)
+        self.tree_box.pack_start(self.root_drop, False, False, 0)
         self.tree_box.pack_start(self.scroll_tree, True, True, 0)
 
         self.connect("key-press-event", self.on_key)
@@ -286,6 +305,7 @@ class ProjectPanel(Gtk.Box):
                 bar.pack_start(bx, False, False, 2)
             self.pack_start(bar, False, False, 2)
             self.pack_start(self.main_v, True, True, 0)
+            self.root_drop.set_visible(True)
             GLib.idle_add(self._compact_sizes)
         else:
             self.top_h = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
@@ -300,6 +320,7 @@ class ProjectPanel(Gtk.Box):
             self.main_h.pack1(self.tree_box, False, False)
             self.main_h.pack2(self.right_v, True, False)
             self.main_h.set_position(280)
+            self.root_drop.set_visible(False)
             self.pack_start(self.main_h, True, True, 0)
 
     def _compact_sizes(self):
@@ -714,6 +735,26 @@ class ProjectPanel(Gtk.Box):
                 except Exception:
                     continue
                 dst = os.path.join(dest, os.path.basename(src))
+                if os.path.exists(dst) or not os.path.exists(src):
+                    continue
+                try:
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                except OSError as ex:
+                    print("Error copiando:", ex)
+            self._do_refresh()
+        ctx.finish(True, False, time)
+
+    def on_root_drop(self, w, ctx, x, y, data, info, time):
+        if data and data.get_uris():
+            for uri in data.get_uris():
+                try:
+                    src = GLib.filename_from_uri(uri)[0]
+                except Exception:
+                    continue
+                dst = os.path.join(self.root, os.path.basename(src))
                 if os.path.exists(dst) or not os.path.exists(src):
                     continue
                 try:
