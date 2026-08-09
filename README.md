@@ -35,7 +35,7 @@ Se pueden abrir varias instancias (cada carpeta en su propia ventana).
 - Editor con pestañas, autoguardado (0.8 s), `Ctrl+S` para guardar
 - Terminales de comandos con pestañas T1/T2 (`Ctrl+T` o botón `+`); seleccionar texto = copiar automático (estilo VS Code)
 - Pestaña con terminal de **opencode** embebido en el proyecto, ocultable con el botón terminal de la barra
-- **Multitarea**: hasta 3 proyectos en una ventana, cada uno con su opencode; si hay 2+ archivos abiertos el terminal de opencode pasa a ser una pestaña más para ahorrar espacio
+- **Multitarea**: al pulsar el botón elige **2 o 3 proyectos** en una ventana, cada uno con su opencode; si hay 2+ archivos abiertos el terminal de opencode pasa a ser una pestaña más para ahorrar espacio
 - Al abrir sin carpeta: abre el **último proyecto** usado; si no hay, muestra directamente el selector de proyecto
 - Gestión de archivos: renombrar (F2), eliminar (Supr), crear `+ Archivo` / `+ Carpeta` in-place en el árbol
 - Drag & drop del explorador del sistema → copia a la carpeta destino

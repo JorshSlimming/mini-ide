@@ -1159,8 +1159,10 @@ class MiniIDE(Gtk.Window):
 
         btn_openfolder = Gtk.Button(label="Abrir carpeta")
         btn_openfolder.connect("clicked", self.open_folder_new_instance)
+        self.max_projects = MAX_PROJECTS
         self.btn_multitask = Gtk.Button(label="Multitarea")
-        self.btn_multitask.connect("clicked", self.toggle_multitask)
+        self.btn_multitask.set_tooltip_text("Elegir número de proyectos")
+        self.btn_multitask.connect("clicked", self.on_multitask_click)
         self.hb = Gtk.HeaderBar()
         self.hb.set_show_close_button(True)
         self.hb.set_title(os.path.basename(self.root))
@@ -1173,14 +1175,26 @@ class MiniIDE(Gtk.Window):
         save_recents(self.root)
 
     # ---------------- multitarea ----------------
-    def toggle_multitask(self, btn=None):
-        if self.mode == "normal":
-            self.enter_multitask()
-        else:
+    def on_multitask_click(self, btn):
+        if self.mode != "normal":
             self.exit_multitask()
+            return
+        menu = Gtk.Menu()
+        for n in (2, 3):
+            item = Gtk.MenuItem(label="%d proyectos" % n)
+            item.connect("activate", lambda w, n=n: self.enter_multitask(n))
+            menu.append(item)
+        menu.show_all()
+        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
 
-    def enter_multitask(self):
+    def enter_multitask(self, n=None):
         self.mode = "multitask"
+        if n is not None:
+            self.max_projects = n
+        if len(self.panels) > self.max_projects:
+            for p in self.panels[self.max_projects:]:
+                p.shutdown()
+            self.panels = self.panels[:self.max_projects]
         self.main_panel.set_layout("compact")
         self.btn_multitask.set_label("Salir multitarea")
         self.set_title("Multitarea — %d proyecto" % len(self.panels))
@@ -1237,7 +1251,7 @@ class MiniIDE(Gtk.Window):
         return box
 
     def open_project(self, folder):
-        if folder not in [p.root for p in self.panels]:
+        if folder not in [p.root for p in self.panels] and len(self.panels) < self.max_projects:
             panel = ProjectPanel(folder, "compact", on_close=self.close_panel)
             self.panels.append(panel)
             save_recents(folder)
@@ -1279,13 +1293,14 @@ class MiniIDE(Gtk.Window):
             if parent is not None:
                 parent.remove(p)
         widgets = []
-        for i in range(MAX_PROJECTS):
+        maxn = self.max_projects
+        for i in range(maxn):
             if i < len(self.panels):
                 widgets.append(self.panels[i])
             else:
                 widgets.append(self.make_empty_slot())
         container = None
-        if MAX_PROJECTS == 2:
+        if maxn == 2:
             container = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
             container.pack1(widgets[0], True, False)
             container.pack2(widgets[1], True, False)
@@ -1308,10 +1323,11 @@ class MiniIDE(Gtk.Window):
     def _mt_sizes(self):
         try:
             w = self._mt_container.get_allocated_width()
+            n = self.max_projects
             if w > 50:
-                self._mt_container.set_position(w // MAX_PROJECTS)
-                if MAX_PROJECTS == 3:
-                    rest = w - w // MAX_PROJECTS
+                self._mt_container.set_position(w // n)
+                if n == 3:
+                    rest = w - w // n
                     self._p23.set_position(rest // 2)
         except Exception:
             pass
