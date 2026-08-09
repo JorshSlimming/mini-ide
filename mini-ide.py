@@ -54,7 +54,7 @@ entry { background-color: #3C3C3C; color: #CCCCCC; }
 scale trough { background-color: #3C3C3C; }
 .dim-label { color: #969696; }
 label { color: #CCCCCC; }
-.root-drop { border: 1px dashed #5B8DFF; background-color: #2A2A2A; padding: 3px 8px; border-radius: 4px; margin: 2px 4px; }
+.root-drop { border: 2px dashed #5B8DFF; background-color: #2A2A2A; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
 .root-drop:hover { background-color: #1E3A5F; }
 """
 
@@ -219,22 +219,10 @@ class ProjectPanel(Gtk.Box):
         btn_newfolder.set_tooltip_text("Nueva carpeta")
         btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
 
-        btn_term = Gtk.ToggleButton()
-        icon = load_icon("terminal") or themed_icon("terminal")
-        if icon:
-            btn_term.set_image(Gtk.Image.new_from_pixbuf(icon))
-        else:
-            btn_term.set_label("Term")
-        btn_term.set_tooltip_text("Mostrar/ocultar terminal")
-        btn_term.set_active(True)
-        btn_term.connect("toggled", self.toggle_terminal)
-        self.btn_term = btn_term
-
         self.path_lbl = Gtk.Label(xalign=0)
         self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>" % self.root)
         self.tree_bar = Gtk.Box(spacing=4)
         self.tree_bar.pack_start(self.path_lbl, True, True, 6)
-        self.tree_bar.pack_end(btn_term, False, False, 0)
         self.tree_bar.pack_end(btn_newfolder, False, False, 0)
         self.tree_bar.pack_end(btn_newfile, False, False, 0)
 
@@ -244,7 +232,7 @@ class ProjectPanel(Gtk.Box):
         if ico:
             self.root_drop.pack_start(Gtk.Image.new_from_pixbuf(ico), False, False, 0)
         drop_lbl = Gtk.Label(xalign=0)
-        drop_lbl.set_markup("<span size='small'>Suelta aquí para copiar a la raíz</span>")
+        drop_lbl.set_markup("<b>Suelta aquí para copiar a la raíz</b>")
         self.root_drop.pack_start(drop_lbl, False, False, 0)
         self.root_drop.drag_dest_set(Gtk.DestDefaults.ALL,
                                      [Gtk.TargetEntry.new("text/uri-list", 0, 80)],
@@ -347,35 +335,7 @@ class ProjectPanel(Gtk.Box):
             return self.opencode_term.get_parent() is self.ed_tabs
         return self.opencode_term.get_visible()
 
-    def toggle_terminal(self, btn):
-        if self._compact_tabbed:
-            if btn.get_active():
-                if self.opencode_term.get_parent() is not self.ed_tabs:
-                    self.ed_tabs.append_page(self.opencode_term, Gtk.Label("OpenCode"))
-                    self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.opencode_term))
-                    self.ed_tabs.show_all()
-            else:
-                if self.opencode_term.get_parent() is self.ed_tabs:
-                    self.ed_tabs.remove_page(self.ed_tabs.page_num(self.opencode_term))
-            return
-        if btn.get_active():
-            self.opencode_term.show()
-            GLib.idle_add(self._resplit_term)
-        else:
-            self.opencode_term.hide()
-            GLib.idle_add(self._collapse_term)
-
-    def _resplit_term(self):
-        try:
-            if self.editor_pane.get_visible():
-                self.top_h.set_position(self.top_h.get_allocated_width() // 2)
-            else:
-                self.top_h.set_position(self.top_h.get_allocated_width())
-        except Exception:
-            pass
-        return False
-
-    def _collapse_term(self):
+    def _mt_panel_width(self):
         try:
             self.top_h.set_position(self.top_h.get_allocated_width())
         except Exception:
@@ -392,17 +352,14 @@ class ProjectPanel(Gtk.Box):
             if self.opencode_term.get_parent() is None:
                 self.opencode_term.show()
                 self.ed_tabs.append_page(self.opencode_term, Gtk.Label("OpenCode"))
-                self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.opencode_term))
-                self.ed_tabs.show_all()
-            self.btn_term.set_active(True)
-            self.btn_term.set_sensitive(False)
-            GLib.idle_add(self._collapse_term)
+            self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.opencode_term))
+            self.ed_tabs.show_all()
+            GLib.idle_add(self._mt_panel_width)
         elif n < 2 and self._compact_tabbed:
             self._compact_tabbed = False
             self.ed_tabs.remove_page(self.ed_tabs.page_num(self.opencode_term))
             self.top_h.pack2(self.opencode_term, True, False)
             self.top_h.show_all()
-            self.btn_term.set_sensitive(True)
             self._apply_editor_visibility()
 
     # ---------------- terminales ----------------
