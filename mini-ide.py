@@ -25,7 +25,7 @@ except Exception:
     pass
 
 FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-OPENCODE = "/home/jorsh/.opencode/bin/opencode"
+OPENCODE = os.environ.get("OPENCODE") or shutil.which("opencode") or os.path.expanduser("~/.opencode/bin/opencode")
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.path.expanduser("~/.config/mini-ide/recent.json")

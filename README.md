@@ -3,10 +3,27 @@
 Mini-IDE propio en **Python + GTK3** (nativo, ~83 MB de RAM) para reemplazar VS Code en el flujo:
 **opencode escribe el código, el mini-IDE sirve para navegar/ver archivos y correr opencode**.
 
-## Lanzamiento
+## Instalación como app
+
+En cualquier equipo con Linux (debian/ubuntu, GTK3):
+
+```bash
+git clone https://github.com/JorshSlimming/mini-ide.git
+cd mini-ide
+./install.sh
+```
+
+El instalador copia el script a `~/.local/bin`, crea la entrada de menú
+**Mini-IDE** y el icono. Luego:
+
+- Búscalo en el menú de aplicaciones, o
+- clic derecho sobre una carpeta > **Abrir con > Mini-IDE**
+
+## Lanzamiento manual
 
 ```bash
 python3 mini-ide.py /ruta/carpeta
+# o si ya instalaste: mini-ide /ruta/carpeta
 ```
 
 Se pueden abrir varias instancias (cada carpeta en su propia ventana).
@@ -40,8 +57,8 @@ Se pueden abrir varias instancias (cada carpeta en su propia ventana).
 
 - Python 3 + PyGObject (Gtk 3, GtkSource 4, VTE 2.91)
 - Opcional: Poppler (PDF), GStreamer (audio), Cairo
-- Binario de opencode en `~/.opencode/bin/opencode`
-- Extensión Material Icon Theme 5.37.0 en VS Code (`pkief.material-icon-theme`) para los iconos
+- Binario de opencode — se busca en: variable `OPENCODE` → `PATH` → `~/.opencode/bin/opencode`
+- Extensión Material Icon Theme 5.37.0 en VS Code (`pkief.material-icon-theme`) para los iconos (opcional, hay fallback)
 
 ## Ver también
 
