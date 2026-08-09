@@ -25,7 +25,7 @@ except Exception:
     pass
 
 FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-OPENCODE = os.environ.get("OPENCODE") or shutil.which("opencode") or os.path.expanduser("~/.opencode/bin/opencode")
+OPENCODE = shutil.which("opencode") or os.environ.get("MINI_IDE_OPENCODE") or os.path.expanduser("~/.opencode/bin/opencode")
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.path.expanduser("~/.config/mini-ide/recent.json")
@@ -40,10 +40,13 @@ VSC_CSS = b"""
 window { background-color: #1F1F1F; }
 box, paned, scrolledwindow, notebook { background-color: #1F1F1F; }
 headerbar { background-color: #3C3C3C; min-height: 0px; padding: 1px 3px; }
+headerbar:backdrop { background-color: #3C3C3C; }
 headerbar button { background-color: #3C3C3C; color: #CCCCCC; border-color: #505050; min-height: 16px; min-width: 22px; padding: 0px 4px; }
 headerbar button:hover { background-color: #505050; }
-headerbar label, headerbar .title, headerbar button label { color: #CCCCCC; font-size: 13px; text-shadow: none; }
-headerbar button.titlebutton, headerbar button.titlebutton label { color: #CCCCCC; }
+headerbar button:backdrop { background-color: #3C3C3C; color: #CCCCCC; }
+headerbar label, headerbar .title, headerbar .subtitle, headerbar button label { color: #CCCCCC; font-size: 13px; text-shadow: none; }
+headerbar .title { background-color: transparent; }
+headerbar button.titlebutton, headerbar button.titlebutton label { color: #CCCCCC; background-color: transparent; }
 headerbar button.titlebutton:hover { background-color: #505050; }
 treeview { background-color: #252526; color: #CCCCCC; }
 treeview:selected { background-color: #094771; color: #FFFFFF; }
@@ -186,6 +189,12 @@ class ProjectPanel(Gtk.Box):
         plus_btn.connect("clicked", lambda w: self.add_command_tab())
         self.tabs.set_action_widget(plus_btn, Gtk.PackType.END)
         plus_btn.show_all()
+        self.btn_collapse = Gtk.Button(label="▾")
+        self.btn_collapse.set_tooltip_text("Hide terminal")
+        self.btn_collapse.connect("clicked", self.toggle_tabs)
+        self.tabs.set_action_widget(self.btn_collapse, Gtk.PackType.END)
+        self.btn_collapse.show_all()
+        self._tabs_collapsed = False
         self.add_command_tab()
 
         # tree
@@ -232,14 +241,9 @@ class ProjectPanel(Gtk.Box):
         btn_open.set_image(Gtk.Image.new_from_icon_name("folder-open", Gtk.IconSize.MENU))
         btn_open.set_tooltip_text("Open folder in file manager")
         btn_open.connect("clicked", self.open_in_fm)
-        self.btn_collapse = Gtk.Button(label="▾")
-        self.btn_collapse.set_tooltip_text("Hide terminal")
-        self.btn_collapse.connect("clicked", self.toggle_tabs)
-        self._tabs_collapsed = False
 
         self.row_path = Gtk.Box(spacing=4)
         self.row_path.pack_start(self.path_lbl, True, True, 6)
-        self.row_path.pack_end(self.btn_collapse, False, False, 0)
         self.row_path.pack_end(btn_open, False, False, 0)
         self.row_path.pack_end(btn_copy, False, False, 0)
         self.row_new = Gtk.Box(spacing=4)
@@ -1130,9 +1134,11 @@ class ProjectPanel(Gtk.Box):
     def _collapse_tabs(self):
         try:
             if self.layout == "compact":
-                self.bottom_h.set_position(self.bottom_h.get_allocated_height())
+                h = self.bottom_h.get_allocated_height()
+                self.bottom_h.set_position(max(0, h - 30))
             else:
-                self.right_v.set_position(self.right_v.get_allocated_height())
+                h = self.right_v.get_allocated_height()
+                self.right_v.set_position(max(0, h - 30))
         except Exception:
             pass
         return False
