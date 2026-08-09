@@ -25,7 +25,7 @@ cat > "$APPS/mini-ide.desktop" <<EOF
 Type=Application
 Name=Mini-IDE
 Comment=Explorador y editor ligero para trabajar con opencode
-Exec=mini-ide %F
+Exec=python3 "$BIN/mini-ide.py" %F
 Icon=mini-ide
 Terminal=false
 Categories=Development;Utility;
