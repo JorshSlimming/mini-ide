@@ -42,7 +42,9 @@ box, paned, scrolledwindow, notebook { background-color: #1F1F1F; }
 headerbar { background-color: #3C3C3C; min-height: 0px; padding: 1px 3px; }
 headerbar button { background-color: #3C3C3C; color: #CCCCCC; border-color: #505050; min-height: 16px; min-width: 22px; padding: 0px 4px; }
 headerbar button:hover { background-color: #505050; }
-headerbar label { color: #CCCCCC; font-size: 13px; }
+headerbar label, headerbar .title, headerbar button label { color: #CCCCCC; font-size: 13px; text-shadow: none; }
+headerbar button.titlebutton, headerbar button.titlebutton label { color: #CCCCCC; }
+headerbar button.titlebutton:hover { background-color: #505050; }
 treeview { background-color: #252526; color: #CCCCCC; }
 treeview:selected { background-color: #094771; color: #FFFFFF; }
 treeview:selected:backdrop { background-color: #37373D; }
@@ -54,6 +56,9 @@ entry { background-color: #3C3C3C; color: #CCCCCC; }
 scale trough { background-color: #3C3C3C; }
 .dim-label { color: #969696; }
 label { color: #CCCCCC; }
+notebook tab, notebook tab label { color: #CCCCCC; }
+notebook tab:active, notebook tab:checked { background-color: #252526; color: #FFFFFF; }
+label, button, headerbar, notebook, treeview { text-shadow: none; -gtk-icon-shadow: none; }
 .root-drop { border: 2px dashed #5B8DFF; background-color: #2A2A2A; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
 .root-drop:hover { background-color: #1E3A5F; }
 """
@@ -210,21 +215,39 @@ class ProjectPanel(Gtk.Box):
         self.scroll_tree = Gtk.ScrolledWindow()
         self.scroll_tree.add(self.tree)
 
-        btn_newfile = Gtk.Button()
-        btn_newfile.set_image(Gtk.Image.new_from_pixbuf(load_icon("file")))
+        btn_newfile = Gtk.Button(label="+ Archivo")
         btn_newfile.set_tooltip_text("Nuevo archivo")
         btn_newfile.connect("clicked", lambda w: self.start_new("newfile"))
-        btn_newfolder = Gtk.Button()
-        btn_newfolder.set_image(Gtk.Image.new_from_pixbuf(load_icon("folder")))
+        btn_newfolder = Gtk.Button(label="+ Carpeta")
         btn_newfolder.set_tooltip_text("Nueva carpeta")
         btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
 
         self.path_lbl = Gtk.Label(xalign=0)
         self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>" % self.root)
-        self.tree_bar = Gtk.Box(spacing=4)
-        self.tree_bar.pack_start(self.path_lbl, True, True, 6)
-        self.tree_bar.pack_end(btn_newfolder, False, False, 0)
-        self.tree_bar.pack_end(btn_newfile, False, False, 0)
+        btn_copy = Gtk.Button()
+        btn_copy.set_image(Gtk.Image.new_from_icon_name("edit-copy", Gtk.IconSize.MENU))
+        btn_copy.set_tooltip_text("Copiar ruta de la carpeta")
+        btn_copy.connect("clicked", self.copy_path)
+        btn_open = Gtk.Button()
+        btn_open.set_image(Gtk.Image.new_from_icon_name("folder-open", Gtk.IconSize.MENU))
+        btn_open.set_tooltip_text("Abrir carpeta en el gestor de archivos")
+        btn_open.connect("clicked", self.open_in_fm)
+        self.btn_collapse = Gtk.Button(label="▾")
+        self.btn_collapse.set_tooltip_text("Ocultar terminal")
+        self.btn_collapse.connect("clicked", self.toggle_tabs)
+        self._tabs_collapsed = False
+
+        self.row_path = Gtk.Box(spacing=4)
+        self.row_path.pack_start(self.path_lbl, True, True, 6)
+        self.row_path.pack_end(self.btn_collapse, False, False, 0)
+        self.row_path.pack_end(btn_open, False, False, 0)
+        self.row_path.pack_end(btn_copy, False, False, 0)
+        self.row_new = Gtk.Box(spacing=4)
+        self.row_new.pack_start(btn_newfile, False, False, 0)
+        self.row_new.pack_start(btn_newfolder, False, False, 0)
+        self.tree_bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.tree_bar.pack_start(self.row_path, False, False, 0)
+        self.tree_bar.pack_start(self.row_new, False, False, 0)
 
         self.root_drop = Gtk.Box(spacing=6)
         self.root_drop.get_style_context().add_class("root-drop")
@@ -310,6 +333,7 @@ class ProjectPanel(Gtk.Box):
             self.main_h.set_position(280)
             self.root_drop.set_visible(False)
             self.pack_start(self.main_h, True, True, 0)
+        GLib.idle_add(self._apply_tabs_state)
 
     def _compact_sizes(self):
         try:
@@ -1074,6 +1098,54 @@ class ProjectPanel(Gtk.Box):
                 paned.set_position(half)
         elif paned.get_position() < alloc.width - 50:
             paned.set_position(alloc.width)
+
+    # ---------------- barra de herramientas ----------------
+    def copy_path(self, btn=None):
+        try:
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(self.root, -1)
+        except Exception:
+            pass
+
+    def open_in_fm(self, btn=None):
+        try:
+            subprocess.Popen(["xdg-open", self.root],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    def toggle_tabs(self, btn=None):
+        self._tabs_collapsed = not self._tabs_collapsed
+        self._apply_tabs_state()
+
+    def _apply_tabs_state(self):
+        if self._tabs_collapsed:
+            self.btn_collapse.set_label("▴")
+            self.btn_collapse.set_tooltip_text("Mostrar terminal")
+            GLib.idle_add(self._collapse_tabs)
+        else:
+            self.btn_collapse.set_label("▾")
+            self.btn_collapse.set_tooltip_text("Ocultar terminal")
+            GLib.idle_add(self._restore_tabs)
+
+    def _collapse_tabs(self):
+        try:
+            if self.layout == "compact":
+                self.bottom_h.set_position(self.bottom_h.get_allocated_height())
+            else:
+                self.right_v.set_position(self.right_v.get_allocated_height())
+        except Exception:
+            pass
+        return False
+
+    def _restore_tabs(self):
+        try:
+            if self.layout == "compact":
+                self.bottom_h.set_position(self.bottom_h.get_allocated_height() // 2)
+            else:
+                self.right_v.set_position(520)
+        except Exception:
+            pass
+        return False
 
     # ---------------- guardado ----------------
     def on_buffer_changed(self, buf):
