@@ -9,4 +9,4 @@ case "$EPP" in
 esac
 echo "<txt>CPU: $NAME</txt>"
 echo "<tool>Perfil de energía: $NAME — clic para alternar (máximo/medio/mínimo)</tool>"
-echo "<click>sudo /home/jorsh/.local/bin/limit-cpu.sh cycle</click>"
+echo "<txtclick>/usr/bin/sudo /home/jorsh/.local/bin/limit-cpu.sh cycle</txtclick>"
