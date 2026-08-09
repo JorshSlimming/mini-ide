@@ -1253,7 +1253,14 @@ class MiniIDE(Gtk.Window):
         return False
 
 if __name__ == "__main__":
-    win = MiniIDE(FOLDER)
+    folder = FOLDER
+    if folder == "--last":
+        try:
+            rec = json.load(open(RECENT_FILE))
+            folder = rec[0] if rec else os.getcwd()
+        except Exception:
+            folder = os.getcwd()
+    win = MiniIDE(folder)
     win.connect("destroy", Gtk.main_quit)
     win.show_all()
     if win.main_panel.ed_tabs.get_n_pages() == 0:
