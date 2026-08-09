@@ -1,11 +1,11 @@
 # Mini-IDE
 
-Mini-IDE propio en **Python + GTK3** (nativo, ~83 MB de RAM) para reemplazar VS Code en el flujo:
-**opencode escribe el código, el mini-IDE sirve para navegar/ver archivos y correr opencode**.
+Custom **Python + GTK3** IDE (native, ~83 MB RAM) to replace VS Code in the workflow:
+**opencode writes the code, Mini-IDE is used to browse/view files and run opencode**.
 
-## Instalación como app
+## Install as an app
 
-En cualquier equipo con Linux (debian/ubuntu, GTK3):
+On any Linux machine (debian/ubuntu, GTK3):
 
 ```bash
 git clone https://github.com/JorshSlimming/mini-ide.git
@@ -13,54 +13,63 @@ cd mini-ide
 ./install.sh
 ```
 
-El instalador copia el script a `~/.local/bin`, crea la entrada de menú
-**Mini-IDE** y el icono. Luego:
+The installer copies the script to `~/.local/bin`, creates the **Mini-IDE** menu entry
+and the icon. Then:
 
-- Búscalo en el menú de aplicaciones, o
-- clic derecho sobre una carpeta > **Abrir con > Mini-IDE**
+- Find it in the application menu, or
+- right-click a folder > **Open with > Mini-IDE**
 
-## Lanzamiento manual
+## Manual launch
 
 ```bash
-python3 mini-ide.py /ruta/carpeta
-# o si ya instalaste: mini-ide /ruta/carpeta
+python3 mini-ide.py /path/to/folder
+# or if installed: mini-ide /path/to/folder
 ```
 
-Se pueden abrir varias instancias (cada carpeta en su propia ventana).
+Multiple instances can be opened (each folder in its own window).
 
-## Funcionalidades
+## Features
 
-- Explorador de archivos con auto-refresh (GFileMonitor): lo que crea opencode o la terminal aparece solo, también en subcarpetas
-- Doble clic abre según tipo: imagen, PDF, audio, CSV coloreado o texto (GtkSource con resaltado)
-- Editor con pestañas, autoguardado (0.8 s), `Ctrl+S` para guardar
-- Terminales de comandos con pestañas T1/T2 (`Ctrl+T` o botón `+`); seleccionar texto = copiar automático (estilo VS Code)
-- Pestaña con terminal de **opencode** embebido en el proyecto, ocultable con el botón terminal de la barra
-- **Multitarea**: al pulsar el botón elige **2 o 3 proyectos** en una ventana, cada uno con su opencode; si hay 2+ archivos abiertos el terminal de opencode pasa a ser una pestaña más para ahorrar espacio
-- Al abrir sin carpeta: abre el **último proyecto** usado; si no hay, muestra directamente el selector de proyecto
-- Gestión de archivos: renombrar (F2), eliminar (Supr), crear `+ Archivo` / `+ Carpeta` in-place en el árbol
-- Drag & drop del explorador del sistema → copia a la carpeta destino
-- Iconos Material Icon Theme con los mapeos exactos de la extensión de VS Code
-- Paleta visual VS Code Dark Modern
+- File browser with auto-refresh (GFileMonitor): files created by opencode or the terminal appear automatically, also in subfolders
+- Double-click opens by type: image, PDF, audio, colored CSV or text (GtkSource with syntax highlighting)
+- Editor with tabs, autosave (0.8 s), `Ctrl+S` to save
+- Command terminals with T1/T2 tabs (`Ctrl+T` or `+` button), collapsible with the ▾ arrow; selecting text = automatic copy (VS Code style)
+- **opencode** terminal embedded in the project; right-click menu with Copy/Paste and the Shift hint for selection
+- **Multitasking**: choose 2 or 3 projects in one window, each with its own opencode; with 2+ open files the opencode terminal becomes an extra tab to save space
+- Toolbar: copy folder path, open folder in file manager, `+ File` / `+ Folder` creation
+- Drop zone above the tree (multitasking): drop files to copy them to the project root
+- Opening without a folder: opens the **last project** used; if none, shows the project selector directly
+- File management: rename (F2), delete (Del), create in-place with Enter/Esc
+- Drag & drop from the system file manager → copies to the destination folder
+- Material Icon Theme icons with the exact mappings from the VS Code extension
+- VS Code Dark Modern palette
 
-## Atajos
+## Shortcuts
 
-| Tecla | Acción |
+| Key | Action |
 |---|---|
-| Doble clic archivo | Abrir (según tipo) |
-| Doble clic carpeta | Expandir / colapsar |
-| `F2` | Renombrar |
-| `Supr` | Eliminar (con confirmación) |
-| `Ctrl+S` | Guardar |
-| `Ctrl+T` | Nueva terminal de comandos |
-| Enter / Esc | Confirmar / cancelar creación en el árbol |
+| Double-click file | Open (by type) |
+| Double-click folder | Expand / collapse |
+| `F2` | Rename |
+| `Del` | Delete (with confirmation) |
+| `Ctrl+S` | Save |
+| `Ctrl+T` | New command terminal |
+| `Ctrl+V` (in terminal) | Paste |
+| Enter / Esc | Confirm / cancel creation in the tree |
 
-## Dependencias
+## Dependencies
 
 - Python 3 + PyGObject (Gtk 3, GtkSource 4, VTE 2.91)
-- Opcional: Poppler (PDF), GStreamer (audio), Cairo
-- Binario de opencode — se busca en: variable `OPENCODE` → `PATH` → `~/.opencode/bin/opencode`
-- Extensión Material Icon Theme 5.37.0 en VS Code (`pkief.material-icon-theme`) para los iconos (opcional, hay fallback)
+- Optional: Poppler (PDF), GStreamer (audio), Cairo
+- opencode binary — resolved from: `OPENCODE` env var → `PATH` → `~/.opencode/bin/opencode`
+- Material Icon Theme 5.37.0 extension in VS Code (`pkief.material-icon-theme`) for icons (optional, has fallback)
 
-## Ver también
+## Power profiles (optional)
 
-- [NOTAS.md](NOTAS.md) — notas de uso y mejoras futuras anotadas
+`scripts/limit-cpu.sh` cycles CPU power profiles (max/medium/min) to control
+temperature on laptops, and `scripts/limit-cpu-genmon.sh` shows the current
+profile in the XFCE panel. See the scripts for usage.
+
+## See also
+
+- [NOTES.md](NOTES.md) — usage notes and planned improvements

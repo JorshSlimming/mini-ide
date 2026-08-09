@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala Mini-IDE como app de escritorio (entrada en el menú + icono).
+# Installs Mini-IDE as a desktop app (menu entry + icon).
 set -e
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -24,8 +24,8 @@ mkdir -p "$HOME/.config/autostart"
 cat > "$HOME/.config/autostart/limit-cpu.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Limit CPU (perfil medio)
-Comment=Aplica el perfil de energia medio al iniciar sesion
+Name=Limit CPU (medium profile)
+Comment=Applies the medium power profile at login
 Exec=sudo $BIN/limit-cpu.sh mild
 Terminal=false
 X-GNOME-Autostart-enabled=true
@@ -37,7 +37,7 @@ cat > "$APPS/mini-ide.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Mini-IDE
-Comment=Explorador y editor ligero para trabajar con opencode
+Comment=Lightweight browser and editor for working with opencode
 Exec=python3 "$BIN/mini-ide.py" %F
 Icon=mini-ide
 Terminal=false
@@ -46,8 +46,8 @@ MimeType=inode/directory;
 StartupNotify=true
 EOF
 
-echo "Instalado. Busca 'Mini-IDE' en el menú de aplicaciones."
-echo "Para abrir una carpeta con Mini-IDE: clic derecho > Abrir con > Mini-IDE"
+echo "Installed. Look for 'Mini-IDE' in the application menu."
+echo "To open a folder with Mini-IDE: right-click > Open with > Mini-IDE"
 echo ""
-echo "Perfil de energía 'medio' al iniciar sesión (requiere sudo una vez):"
+echo "'Medium' power profile at login (requires sudo once):"
 echo "  sudo bash -c 'echo \"%sudo ALL=(root) NOPASSWD: $BIN/limit-cpu.sh\" > /etc/sudoers.d/limit-cpu && chmod 440 /etc/sudoers.d/limit-cpu'"

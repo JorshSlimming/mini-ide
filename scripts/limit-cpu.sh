@@ -1,11 +1,11 @@
 #!/bin/bash
-# limit-cpu.sh — perfiles de energía del CPU (AMD p-state)
-# Uso: sudo limit-cpu.sh [mild|fresh|full|cycle|status]
-#   mild   (default): boost OFF, balance_power, max 3.5 GHz  <- recomendado
-#   fresh           : boost OFF, power,          max 3.0 GHz  <- maximo ahorro
+# limit-cpu.sh — CPU power profiles (AMD p-state)
+# Usage: sudo limit-cpu.sh [mild|fresh|full|cycle|status]
+#   mild   (default): boost OFF, balance_power, max 3.5 GHz  <- recommended
+#   fresh           : boost OFF, power,          max 3.0 GHz  <- maximum savings
 #   full            : boost ON,  balance_performance, 4.63 GHz
-#   cycle           : alterna full -> mild -> fresh -> full
-#   status          : muestra el perfil actual
+#   cycle           : cycles full -> mild -> fresh -> full
+#   status          : shows the current profile
 CPS="/sys/devices/system/cpu/cpufreq"
 MODE="${1:-mild}"
 
@@ -26,27 +26,27 @@ current() {
 case "$MODE" in
     mild)
         set_cpu 0 balance_power 3500000
-        echo "PERFIL: medio (boost OFF, balance_power, 3.5 GHz)"
+        echo "PROFILE: medium (boost OFF, balance_power, 3.5 GHz)"
         ;;
     fresh)
         set_cpu 0 power 3000000
-        echo "PERFIL: minimo (boost OFF, power, 3.0 GHz)"
+        echo "PROFILE: minimum (boost OFF, power, 3.0 GHz)"
         ;;
     full)
         set_cpu 1 balance_performance 4629000
-        echo "PERFIL: maximo (boost ON, balance_performance, 4.63 GHz)"
+        echo "PROFILE: maximum (boost ON, balance_performance, 4.63 GHz)"
         ;;
     cycle)
         current
         if [ "$EPP" = "balance_performance" ]; then
             set_cpu 0 balance_power 3500000
-            echo "PERFIL: medio (boost OFF, balance_power, 3.5 GHz)"
+            echo "PROFILE: medium (boost OFF, balance_power, 3.5 GHz)"
         elif [ "$EPP" = "balance_power" ]; then
             set_cpu 0 power 3000000
-            echo "PERFIL: minimo (boost OFF, power, 3.0 GHz)"
+            echo "PROFILE: minimum (boost OFF, power, 3.0 GHz)"
         else
             set_cpu 1 balance_performance 4629000
-            echo "PERFIL: maximo (boost ON, balance_performance, 4.63 GHz)"
+            echo "PROFILE: maximum (boost ON, balance_performance, 4.63 GHz)"
         fi
         ;;
     status)
@@ -54,6 +54,6 @@ case "$MODE" in
         echo "epp=$EPP boost=$BOOST max=$((MAX/1000)) MHz"
         ;;
     *)
-        echo "Uso: $0 [mild|fresh|full|cycle|status]"
+        echo "Usage: $0 [mild|fresh|full|cycle|status]"
         ;;
 esac

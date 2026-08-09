@@ -141,8 +141,8 @@ def icon_for(name, is_dir=False, expanded=False):
 
 
 class ProjectPanel(Gtk.Box):
-    """Un proyecto completo: opencode + editor + arbol + terminales.
-    layout 'full' (modo normal) o 'compact' (multitarea)."""
+    """A complete project: opencode + editor + tree + terminals.
+    layout 'full' (normal mode) or 'compact' (multitasking)."""
 
     def __init__(self, root, layout="full", on_close=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
@@ -164,7 +164,7 @@ class ProjectPanel(Gtk.Box):
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
         self.dark_scheme = self.style_mgr.get_scheme("vs-dark") or self.style_mgr.get_scheme("oblivion")
 
-        # editor con pestanas
+        # editor with tabs
         self.ed_tabs = Gtk.Notebook()
         self.ed_tabs.set_scrollable(True)
         self.ed_tabs.set_tab_pos(Gtk.PositionType.TOP)
@@ -176,19 +176,19 @@ class ProjectPanel(Gtk.Box):
         self.opencode_term = self.make_terminal()
         self.spawn_opencode()
 
-        # terminales de comandos
+        # command terminals
         self.tabs = Gtk.Notebook()
         self.tabs.set_scrollable(True)
         self.tabs.set_tab_pos(Gtk.PositionType.TOP)
         self.cmd_terms = []
         plus_btn = Gtk.Button(label="+")
-        plus_btn.set_tooltip_text("Nueva terminal (Ctrl+T)")
+        plus_btn.set_tooltip_text("New terminal (Ctrl+T)")
         plus_btn.connect("clicked", lambda w: self.add_command_tab())
         self.tabs.set_action_widget(plus_btn, Gtk.PackType.END)
         plus_btn.show_all()
         self.add_command_tab()
 
-        # arbol
+        # tree
         self.store = Gtk.TreeStore(GdkPixbuf.Pixbuf, str, str, str)
         self.tree = Gtk.TreeView(model=self.store)
         r_icon = Gtk.CellRendererPixbuf()
@@ -197,7 +197,7 @@ class ProjectPanel(Gtk.Box):
         r_name.connect("edited", self.on_name_edited)
         r_name.connect("editing-canceled", self.on_editing_canceled)
         self.r_name = r_name
-        col = Gtk.TreeViewColumn("Archivos")
+        col = Gtk.TreeViewColumn("Files")
         col.pack_start(r_icon, False)
         col.pack_start(r_name, True)
         col.add_attribute(r_icon, "pixbuf", 0)
@@ -215,25 +215,25 @@ class ProjectPanel(Gtk.Box):
         self.scroll_tree = Gtk.ScrolledWindow()
         self.scroll_tree.add(self.tree)
 
-        btn_newfile = Gtk.Button(label="+ Archivo")
-        btn_newfile.set_tooltip_text("Nuevo archivo")
+        btn_newfile = Gtk.Button(label="+ File")
+        btn_newfile.set_tooltip_text("New file")
         btn_newfile.connect("clicked", lambda w: self.start_new("newfile"))
-        btn_newfolder = Gtk.Button(label="+ Carpeta")
-        btn_newfolder.set_tooltip_text("Nueva carpeta")
+        btn_newfolder = Gtk.Button(label="+ Folder")
+        btn_newfolder.set_tooltip_text("New folder")
         btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
 
         self.path_lbl = Gtk.Label(xalign=0)
         self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>" % self.root)
         btn_copy = Gtk.Button()
         btn_copy.set_image(Gtk.Image.new_from_icon_name("edit-copy", Gtk.IconSize.MENU))
-        btn_copy.set_tooltip_text("Copiar ruta de la carpeta")
+        btn_copy.set_tooltip_text("Copy folder path")
         btn_copy.connect("clicked", self.copy_path)
         btn_open = Gtk.Button()
         btn_open.set_image(Gtk.Image.new_from_icon_name("folder-open", Gtk.IconSize.MENU))
-        btn_open.set_tooltip_text("Abrir carpeta en el gestor de archivos")
+        btn_open.set_tooltip_text("Open folder in file manager")
         btn_open.connect("clicked", self.open_in_fm)
         self.btn_collapse = Gtk.Button(label="▾")
-        self.btn_collapse.set_tooltip_text("Ocultar terminal")
+        self.btn_collapse.set_tooltip_text("Hide terminal")
         self.btn_collapse.connect("clicked", self.toggle_tabs)
         self._tabs_collapsed = False
 
@@ -255,7 +255,7 @@ class ProjectPanel(Gtk.Box):
         if ico:
             self.root_drop.pack_start(Gtk.Image.new_from_pixbuf(ico), False, False, 0)
         drop_lbl = Gtk.Label(xalign=0)
-        drop_lbl.set_markup("<b>Suelta aquí para copiar a la raíz</b>")
+        drop_lbl.set_markup("<b>Drop here to copy to root</b>")
         self.root_drop.pack_start(drop_lbl, False, False, 0)
         self.root_drop.drag_dest_set(Gtk.DestDefaults.ALL,
                                      [Gtk.TargetEntry.new("text/uri-list", 0, 80)],
@@ -280,7 +280,7 @@ class ProjectPanel(Gtk.Box):
         self._compact_tabbed = False
         for ch in list(self.get_children()):
             self.remove(ch)
-        # despegar widgets compartidos de sus contenedores viejos
+        # detach shared widgets from their old containers
         for w in (self.opencode_term, self.editor_pane, self.tree_box, self.tabs,
                   getattr(self, "top_h", None)):
             if w is None:
@@ -311,7 +311,7 @@ class ProjectPanel(Gtk.Box):
             bar.pack_start(lbl, True, True, 4)
             if self.on_close:
                 bx = Gtk.Button(label="✕")
-                bx.set_tooltip_text("Cerrar proyecto (mata su opencode)")
+                bx.set_tooltip_text("Close project (kills its opencode)")
                 bx.connect("clicked", lambda w: self.on_close(self))
                 bar.pack_start(bx, False, False, 2)
             self.pack_start(bar, False, False, 2)
@@ -347,7 +347,7 @@ class ProjectPanel(Gtk.Box):
             pass
         return False
 
-    # ---------------- visibilidad editor/terminal ----------------
+    # ---------------- editor/terminal visibility ----------------
     def _apply_editor_visibility(self):
         if self.ed_tabs.get_n_pages() == 0:
             self.editor_pane.hide()
@@ -386,7 +386,7 @@ class ProjectPanel(Gtk.Box):
             self.top_h.show_all()
             self._apply_editor_visibility()
 
-    # ---------------- terminales ----------------
+    # ---------------- terminals ----------------
     def make_terminal(self):
         term = Vte.Terminal()
         term.set_font(Pango.FontDescription("Monospace 10"))
@@ -417,16 +417,16 @@ class ProjectPanel(Gtk.Box):
         if ev.button != 3:
             return False
         menu = Gtk.Menu()
-        item = Gtk.MenuItem(label="Copiar")
+        item = Gtk.MenuItem(label="Copy")
         item.connect("activate", lambda w: term.copy_clipboard())
         menu.append(item)
-        item = Gtk.MenuItem(label="Pegar")
+        item = Gtk.MenuItem(label="Paste")
         item.connect("activate", lambda w: self.term_paste(term))
         menu.append(item)
         if term is self.opencode_term:
             sep = Gtk.SeparatorMenuItem()
             menu.append(sep)
-            hint = Gtk.MenuItem(label="Seleccionar texto: mantén Shift")
+            hint = Gtk.MenuItem(label="Select text: hold Shift")
             hint.set_sensitive(False)
             menu.append(hint)
         menu.show_all()
@@ -500,7 +500,7 @@ class ProjectPanel(Gtk.Box):
                         child.set_text("T%d" % (i + 1))
                         break
 
-    # ---------------- arbol ----------------
+    # ---------------- tree ----------------
     def populate(self, parent_iter, path, store):
         try:
             entries = sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower()))
@@ -760,7 +760,7 @@ class ProjectPanel(Gtk.Box):
                     else:
                         shutil.copy2(src, dst)
                 except OSError as ex:
-                    print("Error copiando:", ex)
+                    print("Copy error:", ex)
             self._do_refresh()
         ctx.finish(True, False, time)
 
@@ -780,7 +780,7 @@ class ProjectPanel(Gtk.Box):
                     else:
                         shutil.copy2(src, dst)
                 except OSError as ex:
-                    print("Error copiando:", ex)
+                    print("Copy error:", ex)
             self._do_refresh()
         ctx.finish(True, False, time)
 
@@ -791,12 +791,12 @@ class ProjectPanel(Gtk.Box):
         fpath = self.store.get_value(sel[1], 2)
         if not fpath or not os.path.exists(fpath):
             return
-        kind = "carpeta" if os.path.isdir(fpath) else "archivo"
+        kind = "folder" if os.path.isdir(fpath) else "file"
         dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                 message_type=Gtk.MessageType.WARNING,
                                 buttons=Gtk.ButtonsType.YES_NO,
-                                text="Eliminar %s" % kind,
-                                secondary_text="¿Eliminar %s '%s' definitivamente?"
+                                text="Delete %s" % kind,
+                                secondary_text="Delete %s '%s' permanently?"
                                                % (kind, os.path.basename(fpath)))
         resp = dlg.run()
         dlg.destroy()
@@ -850,7 +850,7 @@ class ProjectPanel(Gtk.Box):
             with open(fpath, 'r', errors='replace') as f:
                 text = f.read()
         except OSError as ex:
-            print("No se pudo abrir:", ex)
+            print("Could not open:", ex)
             return
         buffer = GtkSource.Buffer()
         buffer.set_text(text)
@@ -900,7 +900,7 @@ class ProjectPanel(Gtk.Box):
         scroll = Gtk.ScrolledWindow()
         scroll.add(tv)
         scroll.show_all()
-        btn_text = Gtk.Button(label="Ver texto")
+        btn_text = Gtk.Button(label="View text")
         btn_text.connect("clicked", lambda w, p=fpath: self.text_from_table(p))
         bar = Gtk.Box(spacing=4)
         bar.pack_start(btn_text, False, False, 4)
@@ -922,7 +922,7 @@ class ProjectPanel(Gtk.Box):
         try:
             pb = GdkPixbuf.Pixbuf.new_from_file(fpath)
         except Exception as ex:
-            print("Error imagen:", ex)
+            print("Image error:", ex)
             return self.open_text(fpath)
         w, h = pb.get_width(), pb.get_height()
         if max(w, h) > 2200:
@@ -942,7 +942,7 @@ class ProjectPanel(Gtk.Box):
         try:
             doc = Poppler.Document.new_from_file("file://" + fpath, None)
         except Exception as ex:
-            print("Error PDF:", ex)
+            print("PDF error:", ex)
             return self.open_text(fpath)
         if doc is None:
             return self.open_text(fpath)
@@ -969,7 +969,7 @@ class ProjectPanel(Gtk.Box):
                 surface.get_data(), GdkPixbuf.Colorspace.RGB, True, 8,
                 int(w * s), int(h * s), surface.get_stride())
             img.set_from_pixbuf(pb)
-            lbl.set_text("Página %d/%d" % (state["page"] + 1, state["doc"].get_n_pages()))
+            lbl.set_text("Page %d/%d" % (state["page"] + 1, state["doc"].get_n_pages()))
             scroll.get_vadjustment().set_value(0)
 
         def prev(_):
@@ -1120,11 +1120,11 @@ class ProjectPanel(Gtk.Box):
     def _apply_tabs_state(self):
         if self._tabs_collapsed:
             self.btn_collapse.set_label("▴")
-            self.btn_collapse.set_tooltip_text("Mostrar terminal")
+            self.btn_collapse.set_tooltip_text("Show terminal")
             GLib.idle_add(self._collapse_tabs)
         else:
             self.btn_collapse.set_label("▾")
-            self.btn_collapse.set_tooltip_text("Ocultar terminal")
+            self.btn_collapse.set_tooltip_text("Hide terminal")
             GLib.idle_add(self._restore_tabs)
 
     def _collapse_tabs(self):
@@ -1147,7 +1147,7 @@ class ProjectPanel(Gtk.Box):
             pass
         return False
 
-    # ---------------- guardado ----------------
+    # ---------------- saving ----------------
     def on_buffer_changed(self, buf):
         if not self.buf_path.get(buf):
             return
@@ -1171,7 +1171,7 @@ class ProjectPanel(Gtk.Box):
                     with open(path, 'w') as f:
                         f.write(buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False))
                 except OSError as ex:
-                    print("No se pudo guardar:", ex)
+                    print("Could not save:", ex)
                 break
 
     def on_key(self, w, ev):
@@ -1263,11 +1263,11 @@ class MiniIDE(Gtk.Window):
         self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.content.pack_start(self.main_panel, True, True, 0)
 
-        btn_openfolder = Gtk.Button(label="Abrir carpeta")
+        btn_openfolder = Gtk.Button(label="Open folder")
         btn_openfolder.connect("clicked", self.open_folder_new_instance)
         self.max_projects = MAX_PROJECTS
         self.btn_multitask = Gtk.Button(label="Multitarea")
-        self.btn_multitask.set_tooltip_text("Elegir número de proyectos")
+        self.btn_multitask.set_tooltip_text("Choose number of projects")
         self.btn_multitask.connect("clicked", self.on_multitask_click)
         self.hb = Gtk.HeaderBar()
         self.hb.set_show_close_button(True)
@@ -1280,14 +1280,14 @@ class MiniIDE(Gtk.Window):
         self.connect("key-press-event", self.on_win_key)
         save_recents(self.root)
 
-    # ---------------- multitarea ----------------
+    # ---------------- multitasking ----------------
     def on_multitask_click(self, btn):
         if self.mode != "normal":
             self.exit_multitask()
             return
         menu = Gtk.Menu()
         for n in (2, 3):
-            item = Gtk.MenuItem(label="%d proyectos" % n)
+            item = Gtk.MenuItem(label="%d projects" % n)
             item.connect("activate", lambda w, n=n: self.enter_multitask(n))
             menu.append(item)
         menu.show_all()
@@ -1302,8 +1302,8 @@ class MiniIDE(Gtk.Window):
                 p.shutdown()
             self.panels = self.panels[:self.max_projects]
         self.main_panel.set_layout("compact")
-        self.btn_multitask.set_label("Salir multitarea")
-        self.set_title("Multitarea — %d proyecto" % len(self.panels))
+        self.btn_multitask.set_label("Exit multitasking")
+        self.set_title("Multitasking — %d project" % len(self.panels))
         self.rebuild_layout()
 
     def exit_multitask(self):
@@ -1313,8 +1313,8 @@ class MiniIDE(Gtk.Window):
             dlg = Gtk.MessageDialog(transient_for=self, modal=True,
                                     message_type=Gtk.MessageType.QUESTION,
                                     buttons=Gtk.ButtonsType.YES_NO,
-                                    text="Salir de multitarea",
-                                    secondary_text="Se cerrarán: %s (y sus opencode). ¿Continuar?" % names)
+                                    text="Exit multitasking",
+                                    secondary_text="Will close: %s (and their opencode). Continue?" % names)
             resp = dlg.run()
             dlg.destroy()
             if resp != Gtk.ResponseType.YES:
@@ -1324,7 +1324,7 @@ class MiniIDE(Gtk.Window):
             self.panels = [self.main_panel]
         self.mode = "normal"
         self.main_panel.set_layout("full")
-        self.btn_multitask.set_label("Multitarea")
+        self.btn_multitask.set_label("Multitasking")
         self.set_title(os.path.basename(self.root))
         for ch in list(self.content.get_children()):
             self.content.remove(ch)
@@ -1338,10 +1338,10 @@ class MiniIDE(Gtk.Window):
     def make_empty_slot(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         lbl = Gtk.Label(xalign=0)
-        lbl.set_markup("<b>Proyecto nuevo</b>")
+        lbl.set_markup("<b>New project</b>")
         box.pack_start(lbl, False, False, 8)
         if self.recents:
-            lbl2 = Gtk.Label("Recientes:", xalign=0)
+            lbl2 = Gtk.Label("Recent:", xalign=0)
             box.pack_start(lbl2, False, False, 2)
             for folder in self.recents[:6]:
                 b = Gtk.Button()
@@ -1351,7 +1351,7 @@ class MiniIDE(Gtk.Window):
                 b.add(inner)
                 b.connect("clicked", lambda w, f=folder: self.open_project(f))
                 box.pack_start(b, False, False, 0)
-        btn = Gtk.Button(label="Elegir carpeta…")
+        btn = Gtk.Button(label="Choose folder…")
         btn.connect("clicked", self.browse_project)
         box.pack_start(btn, False, False, 4)
         return box
@@ -1364,7 +1364,7 @@ class MiniIDE(Gtk.Window):
             self.rebuild_layout()
 
     def browse_project(self, btn=None):
-        dlg = Gtk.FileChooserDialog(title="Abrir proyecto en multitarea", transient_for=self,
+        dlg = Gtk.FileChooserDialog(title="Open project in multitasking", transient_for=self,
                                     action=Gtk.FileChooserAction.SELECT_FOLDER)
         dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                         Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
@@ -1378,8 +1378,8 @@ class MiniIDE(Gtk.Window):
         dlg = Gtk.MessageDialog(transient_for=self, modal=True,
                                 message_type=Gtk.MessageType.WARNING,
                                 buttons=Gtk.ButtonsType.YES_NO,
-                                text="Cerrar proyecto",
-                                secondary_text="Se cerrará '%s' y su opencode." % os.path.basename(panel.root))
+                                text="Close project",
+                                secondary_text="'%s' and its opencode will be closed." % os.path.basename(panel.root))
         resp = dlg.run()
         dlg.destroy()
         if resp != Gtk.ResponseType.YES:
@@ -1423,7 +1423,7 @@ class MiniIDE(Gtk.Window):
         self.content.show_all()
         for p in self.panels:
             p._apply_editor_visibility()
-        self.set_title("Multitarea — %d proyecto%s" % (len(self.panels), "s" if len(self.panels) > 1 else ""))
+        self.set_title("Multitasking — %d project%s" % (len(self.panels), "s" if len(self.panels) > 1 else ""))
         GLib.idle_add(self._mt_sizes)
 
     def _mt_sizes(self):
@@ -1439,7 +1439,7 @@ class MiniIDE(Gtk.Window):
             pass
         return False
 
-    # ---------------- ventana ----------------
+    # ---------------- window ----------------
     def open_folder_new_instance(self, btn=None):
         dlg = Gtk.FileChooserDialog(title="Abrir carpeta", transient_for=self,
                                     action=Gtk.FileChooserAction.SELECT_FOLDER)
@@ -1474,7 +1474,7 @@ if __name__ == "__main__":
         except Exception:
             folder = None
     if not folder:
-        dlg = Gtk.FileChooserDialog(title="Selecciona un proyecto",
+        dlg = Gtk.FileChooserDialog(title="Select a project",
                                     action=Gtk.FileChooserAction.SELECT_FOLDER)
         dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                         Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
