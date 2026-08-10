@@ -147,25 +147,145 @@ class DocumentStateTest(unittest.TestCase):
 
     def test_deleted_doc_ignores_further_events(self):
         self.doc.snapshot_from_disk()
-        self.doc.mark_deleted()
+        self.doc.external_delete()
         self.assertEqual(self.doc.on_disk_event(self.snap()), 'ignore')
         self.assertEqual(self.doc.on_disk_event(None), 'ignore')
 
-    def test_mark_deleted_cancels_autosave(self):
+    def test_external_delete_cancels_autosave(self):
         self.doc.snapshot_from_disk()
         self.doc.mark_edited()
-        self.doc.mark_deleted()
+        self.doc.external_delete()
         self.assertTrue(self.doc.deleted)
-        self.assertFalse(self.doc.dirty)
+        self.assertTrue(self.doc.dirty)
         self.assertIsNone(self.doc.save_timer)
         self.assertEqual(self.timer.timers, {})
 
     def test_edit_after_delete_never_saves(self):
         self.doc.snapshot_from_disk()
         self.doc.mark_edited()
-        self.doc.mark_deleted()
-        self.doc.mark_edited()
+        self.doc.external_delete()
+        self.assertFalse(self.doc.mark_edited())
         self.assertEqual(self.timer.timers, {})
+
+    def test_external_delete_of_clean_doc_stays_clean(self):
+        self.doc.snapshot_from_disk()
+        self.doc.external_delete()
+        self.assertTrue(self.doc.deleted)
+        self.assertFalse(self.doc.dirty)
+
+    # --- RA-003: conflict is never resolved implicitly ---
+
+    def test_typing_does_not_clear_conflict(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.conflict = True
+        self.doc.cancel_autosave()
+        self.assertFalse(self.doc.mark_edited())
+        self.assertTrue(self.doc.conflict)
+        self.assertIsNone(self.doc.save_timer)
+        self.assertEqual(self.timer.timers, {})
+
+    def test_resolve_reload_clears_conflict(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.conflict = True
+        self.doc.resolve_reload()
+        self.assertFalse(self.doc.conflict)
+        self.assertFalse(self.doc.dirty)
+        self.assertEqual(self.doc.saved_snap, self.snap())
+
+    def test_resolve_keep_local_clears_conflict_and_rearms_autosave(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.conflict = True
+        self.doc.resolve_keep_local()
+        self.assertFalse(self.doc.conflict)
+        self.assertTrue(self.doc.dirty)
+        self.assertIsNotNone(self.doc.save_timer)
+
+    # --- RA-006: deleted dirty recovery ---
+
+    def test_recreate_recovers_deleted_dirty(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.external_delete()
+        self.doc.recreate()
+        self.assertFalse(self.doc.deleted)
+        self.assertFalse(self.doc.dirty)
+        self.assertEqual(self.doc.saved_snap, self.snap())
+
+    def test_save_as_recovers_deleted_dirty(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.external_delete()
+        new_path = os.path.join(self.dir, "recovered.py")
+        self.doc.save_as(new_path)
+        self.assertEqual(self.doc.path, new_path)
+        self.assertFalse(self.doc.deleted)
+        self.assertFalse(self.doc.dirty)
+
+    # --- RA-004/RA-005: folder helpers ---
+
+    def test_docs_under(self):
+        from mini_ide.document import docs_under
+        self.doc.snapshot_from_disk()
+        other = os.path.join(self.dir, "other.py")
+        with open(other, "w") as f:
+            f.write("x\n")
+        doc2 = DocumentState(other, object(), self.timer.timeout_add,
+                             self.timer.source_remove, self._save_cb)
+        self.assertEqual(docs_under([self.doc, doc2], self.dir), [self.doc, doc2])
+        sub = os.path.join(self.dir, "sub")
+        os.makedirs(sub)
+        self.assertEqual(docs_under([self.doc, doc2], sub), [])
+
+    def test_doc_relocator_folder(self):
+        from mini_ide.document import doc_relocator
+        src = os.path.join(self.dir, "src")
+        os.makedirs(src)
+        a = os.path.join(src, "a.py")
+        b = os.path.join(src, "sub", "b.py")
+        os.makedirs(os.path.dirname(b))
+        with open(a, "w") as f:
+            f.write("a\n")
+        with open(b, "w") as f:
+            f.write("b\n")
+        doca = DocumentState(a, object(), self.timer.timeout_add,
+                             self.timer.source_remove, self._save_cb)
+        docb = DocumentState(b, object(), self.timer.timeout_add,
+                             self.timer.source_remove, self._save_cb)
+        outside = os.path.join(self.dir, "other.py")
+        with open(outside, "w") as f:
+            f.write("x\n")
+        doco = DocumentState(outside, object(), self.timer.timeout_add,
+                             self.timer.source_remove, self._save_cb)
+        moved = doc_relocator([doca, docb, doco], src, os.path.join(self.dir, "source"))
+        self.assertEqual(moved[doca], os.path.join(self.dir, "source", "a.py"))
+        self.assertEqual(moved[docb], os.path.join(self.dir, "source", "sub", "b.py"))
+        self.assertNotIn(doco, moved)
+
+    def test_doc_relocator_file(self):
+        from mini_ide.document import doc_relocator
+        old = os.path.join(self.dir, "old.py")
+        with open(old, "w") as f:
+            f.write("x\n")
+        doc = DocumentState(old, object(), self.timer.timeout_add,
+                            self.timer.source_remove, self._save_cb)
+        moved = doc_relocator([doc], old, os.path.join(self.dir, "new.py"))
+        self.assertEqual(moved[doc], os.path.join(self.dir, "new.py"))
+
+    def test_doc_relocator_ignores_sibling_prefix(self):
+        from mini_ide.document import doc_relocator
+        old = os.path.join(self.dir, "old.py")
+        sib = os.path.join(self.dir, "old2.py")
+        with open(old, "w") as f:
+            f.write("x\n")
+        with open(sib, "w") as f:
+            f.write("y\n")
+        doc = DocumentState(sib, object(), self.timer.timeout_add,
+                            self.timer.source_remove, self._save_cb)
+        moved = doc_relocator([doc], old, os.path.join(self.dir, "new.py"))
+        self.assertNotIn(doc, moved)
 
 
 if __name__ == "__main__":

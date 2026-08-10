@@ -1,5 +1,7 @@
 import os
 
+from .file_ops import path_inside
+
 
 class DocumentState:
     """State of one open editor document (path, dirty/conflict flags,
@@ -9,7 +11,7 @@ class DocumentState:
     unit-testable without a display.
     """
 
-    def __init__(self, path, buffer, schedule, remove, save_cb):
+    def __init__(self, path, buffer, schedule, remove, save_cb, strict_utf8=True):
         self.path = path
         self.buffer = buffer
         self.dirty = False
@@ -17,6 +19,7 @@ class DocumentState:
         self.deleted = False
         self.saved_snap = None
         self.save_timer = None
+        self.strict_utf8 = strict_utf8
         self._schedule = schedule
         self._remove = remove
         self._save_cb = save_cb
@@ -30,12 +33,17 @@ class DocumentState:
         return self.saved_snap
 
     def mark_edited(self):
-        """User modified the buffer: mark dirty and (re)arm autosave."""
+        """User modified the buffer.
+
+        A conflict is NEVER resolved implicitly by typing, and autosave
+        stays suspended while the document is conflicted or deleted.
+        Returns True when autosave was armed.
+        """
         self.dirty = True
-        self.conflict = False
-        if not self.deleted:
-            self.schedule_autosave(800)
-        return self.save_timer is not None
+        if self.conflict or self.deleted:
+            return False
+        self.schedule_autosave(800)
+        return True
 
     def schedule_autosave(self, delay_ms):
         if self.save_timer is not None:
@@ -58,10 +66,34 @@ class DocumentState:
         self.conflict = False
         self.snapshot_from_disk()
 
-    def mark_deleted(self):
-        self.deleted = True
+    def resolve_reload(self):
+        """Explicit resolution: content was reloaded from disk."""
         self.dirty = False
+        self.conflict = False
+        self.snapshot_from_disk()
+
+    def resolve_keep_local(self):
+        """Explicit resolution: the user keeps the editor version."""
+        self.conflict = False
+        if not self.deleted:
+            self.schedule_autosave(800)
+
+    def external_delete(self):
+        """The file disappeared externally. Dirty state is preserved so
+        DELETED_DIRTY content can be recovered."""
+        self.deleted = True
         self.cancel_autosave()
+
+    def recreate(self):
+        """Recovery: buffer was written back to the original path."""
+        self.deleted = False
+        self.mark_saved()
+
+    def save_as(self, new_path):
+        """Recovery: buffer was saved to a different path."""
+        self.path = new_path
+        self.deleted = False
+        self.mark_saved()
 
     def on_disk_event(self, disk):
         """Classify a filesystem event for this open document.
@@ -79,3 +111,21 @@ class DocumentState:
         if not self.dirty:
             return 'reload'
         return 'conflict'
+
+
+def docs_under(docs, folder):
+    """Documents whose path is `folder` or lives inside it."""
+    return [d for d in docs
+            if d.path == folder or path_inside(folder, d.path)]
+
+
+def doc_relocator(docs, old_dir, new_dir):
+    """Compute the new path of every open document under old_dir after a
+    rename. Returns {doc: new_path}."""
+    out = {}
+    for doc in docs:
+        p = doc.path
+        if p == old_dir or path_inside(old_dir, p):
+            rel = os.path.relpath(p, old_dir)
+            out[doc] = new_dir if rel == "." else os.path.join(new_dir, rel)
+    return out

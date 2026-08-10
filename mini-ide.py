@@ -3,10 +3,10 @@
 import sys, os, shutil, csv, json, subprocess, math
 from itertools import islice
 from mini_ide.settings import WARN_LARGE, MAX_LARGE, MAX_PDF_PIXELS
-from mini_ide.file_ops import (atomic_write, validate_child_name, looks_binary,
+from mini_ide.file_ops import (atomic_write, validate_child_name,
                                create_new_file, create_new_dir, path_inside,
                                copy_dest_safe)
-from mini_ide.document import DocumentState
+from mini_ide.document import DocumentState, doc_relocator, docs_under
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -509,6 +509,20 @@ class ProjectPanel(Gtk.Box):
             pass
         return True
 
+    def _spawn_async(self, term, wd, argv, on_pid=None):
+        def on_spawn(t, pid, err, data=None):
+            if on_pid:
+                on_pid(int(pid) if pid else None)
+            if err is not None:
+                print("spawn error (%s):" % argv[0], err)
+
+        try:
+            term.spawn_async(Vte.PtyFlags.DEFAULT, wd, argv, None,
+                             GLib.SpawnFlags.DEFAULT, None, None, 10000,
+                             None, on_spawn, None)
+        except Exception as ex:
+            print("spawn error (%s):" % argv[0], ex)
+
     def spawn_opencode(self):
         if not OPENCODE or not os.path.isfile(OPENCODE) or not os.access(OPENCODE, os.X_OK):
             try:
@@ -523,19 +537,8 @@ class ProjectPanel(Gtk.Box):
             except Exception:
                 pass
             return
-
-        def on_spawn(term, pid, err, data=None):
-            self.opencode_pid = int(pid) if pid else None
-            if err is not None:
-                print("opencode spawn error:", err)
-
-        try:
-            self.opencode_term.spawn_async(Vte.PtyFlags.DEFAULT, self.root, [OPENCODE], None,
-                                           GLib.SpawnFlags.DEFAULT, None, None, 10000,
-                                           None, on_spawn, None)
-        except Exception as ex:
-            print("opencode spawn error:", ex)
-            self.opencode_pid = None
+        self._spawn_async(self.opencode_term, self.root, [OPENCODE],
+                          lambda pid: setattr(self, "opencode_pid", pid))
 
     def on_term_selection(self, term):
         try:
@@ -547,9 +550,7 @@ class ProjectPanel(Gtk.Box):
 
     def add_command_tab(self, btn=None):
         term = self.make_terminal()
-        term.spawn_sync(Vte.PtyFlags.DEFAULT, self.root,
-                        ["/bin/bash"], [], GLib.SpawnFlags.DEFAULT,
-                        None, None, None)
+        self._spawn_async(term, self.root, ["/bin/bash"])
         self.cmd_terms.append(term)
         lbl = Gtk.Label("T%d" % len(self.cmd_terms))
         close = Gtk.Button(label="✕")
@@ -653,18 +654,18 @@ class ProjectPanel(Gtk.Box):
                 doc.conflict = True
                 doc.cancel_autosave()
                 self._update_tab_ui(buf)
-                self._conflict_dialog(buf, doc.path)
+                self._conflict_dialog(doc)
             return
         if decision == 'deleted':
-            doc.mark_deleted()
+            doc.external_delete()
             self._update_tab_ui(buf)
 
-    def _conflict_dialog(self, buf, path):
+    def _conflict_dialog(self, doc):
         try:
             dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                     message_type=Gtk.MessageType.WARNING,
                                     buttons=Gtk.ButtonsType.NONE,
-                                    text="%s changed outside Mini-IDE" % os.path.basename(path),
+                                    text="%s changed outside Mini-IDE" % os.path.basename(doc.path),
                                     secondary_text="You have unsaved edits. Autosave is "
                                                    "suspended until you decide.")
             dlg.add_button("Reload from disk", Gtk.ResponseType.YES)
@@ -672,14 +673,29 @@ class ProjectPanel(Gtk.Box):
             resp = dlg.run()
             dlg.destroy()
             if resp == Gtk.ResponseType.YES:
-                self.reload_buffer(buf, path)
+                self.reload_buffer(doc.buffer, doc.path)
+            elif resp == Gtk.ResponseType.NO:
+                doc.resolve_keep_local()
+                self._update_tab_ui(doc.buffer)
         except Exception:
             pass
 
     def reload_buffer(self, buf, path):
+        doc = self.docs.get(buf)
+        strict = bool(doc and doc.strict_utf8)
         try:
-            with open(path, 'r', errors='replace') as f:
-                text = f.read()
+            if strict:
+                with open(path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+            else:
+                with open(path, 'r', errors='replace') as f:
+                    text = f.read()
+        except UnicodeDecodeError:
+            try:
+                with open(path, 'r', errors='replace') as f:
+                    text = f.read()
+            except OSError:
+                return
         except OSError:
             return
         self._reloading = True
@@ -687,9 +703,8 @@ class ProjectPanel(Gtk.Box):
             buf.set_text(text)
         finally:
             self._reloading = False
-        doc = self.docs.get(buf)
         if doc:
-            doc.mark_saved()
+            doc.resolve_reload()
         self._update_tab_ui(buf)
 
     def _do_refresh(self):
@@ -890,15 +905,9 @@ class ProjectPanel(Gtk.Box):
         except OSError as ex:
             print("Error:", ex)
             return
-        if old in self.open_widgets:
-            widget = self.open_widgets.pop(old)
-            self.open_widgets[new] = widget
-            entry = self.ed_paths.pop(old)
-            self.ed_paths[new] = entry
-            doc = self.docs.get(entry[0])
-            if doc:
-                doc.path = new
-            self._update_tab_ui(entry[0])
+        for doc, new_path in doc_relocator(self.docs.values(), old, new).items():
+            self._migrate_doc_path(doc, new_path)
+            self._update_tab_ui(doc.buffer)
         self.refresh_tree()
         self.select_path(new)
 
@@ -952,14 +961,13 @@ class ProjectPanel(Gtk.Box):
     def _copy_dest_safe(self, src, dst):
         return copy_dest_safe(src, dst)
 
-    def _copy_error_dialog(self, name):
+    def _copy_error_dialog(self, name, reason="Cannot copy into itself or a descendant folder."):
         try:
             dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                     message_type=Gtk.MessageType.ERROR,
                                     buttons=Gtk.ButtonsType.OK,
                                     text="Copy refused",
-                                    secondary_text="Cannot copy '%s' into itself or a "
-                                                   "descendant folder." % name)
+                                    secondary_text="Cannot copy '%s': %s" % (name, reason))
             dlg.run()
             dlg.destroy()
         except Exception:
@@ -985,6 +993,10 @@ class ProjectPanel(Gtk.Box):
                 dst = os.path.join(dest, os.path.basename(src))
                 if os.path.exists(dst) or not os.path.exists(src):
                     continue
+                if not path_inside(self.root, dst):
+                    self._copy_error_dialog(os.path.basename(src),
+                                            "the destination is outside the project root.")
+                    continue
                 if os.path.isdir(src) and not self._copy_dest_safe(src, dst):
                     self._copy_error_dialog(os.path.basename(src))
                     continue
@@ -1007,6 +1019,10 @@ class ProjectPanel(Gtk.Box):
                     continue
                 dst = os.path.join(self.root, os.path.basename(src))
                 if os.path.exists(dst) or not os.path.exists(src):
+                    continue
+                if not path_inside(self.root, dst):
+                    self._copy_error_dialog(os.path.basename(src),
+                                            "the destination is outside the project root.")
                     continue
                 if os.path.isdir(src) and not self._copy_dest_safe(src, dst):
                     self._copy_error_dialog(os.path.basename(src))
@@ -1037,17 +1053,32 @@ class ProjectPanel(Gtk.Box):
                                                % (kind, os.path.basename(fpath)))
         resp = dlg.run()
         dlg.destroy()
-        if resp == Gtk.ResponseType.YES:
-            try:
-                if os.path.isdir(fpath):
-                    shutil.rmtree(fpath)
-                else:
-                    os.remove(fpath)
-            except OSError as ex:
-                print("Error:", ex)
+        if resp != Gtk.ResponseType.YES:
+            return
+        affected = []
+        if kind == "folder":
+            affected = docs_under(self.docs.values(), fpath)
+        else:
+            entry = self.ed_paths.get(fpath)
+            if entry:
+                doc = self.docs.get(entry[0])
+                if doc is not None:
+                    affected = [doc]
+        for doc in affected:
+            if self._try_close_doc(doc, doc.path) == 'abort':
                 return
-            self.close_file_tab(None, fpath, quiet=True)
-            self.refresh_tree()
+        try:
+            if kind == "folder":
+                shutil.rmtree(fpath)
+            else:
+                os.remove(fpath)
+        except OSError as ex:
+            print("Error:", ex)
+            return
+        for doc in affected:
+            self.close_file_tab(None, doc.path, quiet=True)
+        self.close_file_tab(None, fpath, quiet=True)
+        self.refresh_tree()
 
     # ---------------- visores ----------------
     def open_file(self, fpath):
@@ -1124,7 +1155,13 @@ class ProjectPanel(Gtk.Box):
             if resp != Gtk.ResponseType.YES:
                 return
             readonly = True
-        if looks_binary(fpath):
+        try:
+            with open(fpath, 'rb') as f:
+                sample = f.read(8192)
+        except OSError as ex:
+            print("Could not open:", ex)
+            return
+        if b"\x00" in sample:
             dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                     message_type=Gtk.MessageType.WARNING,
                                     buttons=Gtk.ButtonsType.NONE,
@@ -1142,9 +1179,41 @@ class ProjectPanel(Gtk.Box):
                 except Exception:
                     pass
             return
+        valid_utf8 = True
         try:
-            with open(fpath, 'r', errors='replace') as f:
-                text = f.read()
+            sample.decode('utf-8')
+        except UnicodeDecodeError:
+            valid_utf8 = False
+        if not valid_utf8:
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.WARNING,
+                                    buttons=Gtk.ButtonsType.NONE,
+                                    text="Encoding: %s" % os.path.basename(fpath),
+                                    secondary_text="The file does not appear to be valid UTF-8. "
+                                                   "It will be opened read-only to avoid "
+                                                   "corrupting it.")
+            dlg.add_button("Open read-only", Gtk.ResponseType.YES)
+            dlg.add_button("Open externally", Gtk.ResponseType.NO)
+            dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.NO:
+                try:
+                    subprocess.Popen(["xdg-open", fpath],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+                return
+            if resp != Gtk.ResponseType.YES:
+                return
+            readonly = True
+        try:
+            if valid_utf8:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    text = f.read()
+            else:
+                with open(fpath, 'r', errors='replace') as f:
+                    text = f.read()
         except OSError as ex:
             print("Could not open:", ex)
             return
@@ -1168,7 +1237,7 @@ class ProjectPanel(Gtk.Box):
         buffer.connect("changed", self.on_buffer_changed)
         self.make_tab(scroll, fpath, scroll)
         doc = DocumentState(fpath, buffer, GLib.timeout_add, GLib.source_remove,
-                            self._autosave_buffer)
+                            self._autosave_buffer, strict_utf8=valid_utf8)
         doc.snapshot_from_disk()
         self.docs[buffer] = doc
         self._update_tab_ui(buffer)
@@ -1178,11 +1247,53 @@ class ProjectPanel(Gtk.Box):
             self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.open_widgets[fpath]))
             self.editor_pane.show_all()
             return
+        try:
+            size = os.path.getsize(fpath)
+        except OSError as ex:
+            print("Error:", ex)
+            return
+        if size > MAX_LARGE:
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.WARNING,
+                                    buttons=Gtk.ButtonsType.NONE,
+                                    text="CSV too large to open in the editor",
+                                    secondary_text="%.1f MB (%s). Open it externally?"
+                                                   % (size / 1048576, os.path.basename(fpath)))
+            dlg.add_button("Open externally", Gtk.ResponseType.YES)
+            dlg.add_button("Cancel", Gtk.ResponseType.NO)
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                try:
+                    subprocess.Popen(["xdg-open", fpath],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            return
+        try:
+            csv.field_size_limit(4 * 1024 * 1024)
+        except Exception:
+            pass
         delim = '\t' if fpath.rsplit(".", 1)[-1].lower() == "tsv" else ','
         try:
             with open(fpath, newline='', errors='replace') as f:
                 reader = csv.reader(f, delimiter=delim)
                 rows = list(islice(reader, 20001))
+        except csv.Error as ex:
+            print("CSV error:", ex)
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.ERROR,
+                                    buttons=Gtk.ButtonsType.NONE,
+                                    text="Malformed CSV: %s" % os.path.basename(fpath),
+                                    secondary_text="The file could not be parsed as a table. "
+                                                   "View it as text?")
+            dlg.add_button("View as text", Gtk.ResponseType.YES)
+            dlg.add_button("Cancel", Gtk.ResponseType.NO)
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                self.open_text(fpath)
+            return
         except OSError as ex:
             print("Error:", ex)
             return
@@ -1230,14 +1341,36 @@ class ProjectPanel(Gtk.Box):
             self.editor_pane.show_all()
             return
         try:
-            pb = GdkPixbuf.Pixbuf.new_from_file(fpath)
+            info = GdkPixbuf.Pixbuf.get_file_info(fpath)
+            w0 = info[0] if info else 0
+            h0 = info[1] if info else 0
+            if w0 and h0 and w0 * h0 > 100_000_000:
+                dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                        message_type=Gtk.MessageType.WARNING,
+                                        buttons=Gtk.ButtonsType.NONE,
+                                        text="Image too large to display",
+                                        secondary_text="%dx%d px (%s). Open it externally?"
+                                                       % (w0, h0, os.path.basename(fpath)))
+                dlg.add_button("Open externally", Gtk.ResponseType.YES)
+                dlg.add_button("Cancel", Gtk.ResponseType.NO)
+                resp = dlg.run()
+                dlg.destroy()
+                if resp == Gtk.ResponseType.YES:
+                    try:
+                        subprocess.Popen(["xdg-open", fpath],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except Exception:
+                        pass
+                return
+            if w0 and h0 and max(w0, h0) > 2200:
+                s = 2200 / max(w0, h0)
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(fpath, int(w0 * s),
+                                                             int(h0 * s), True)
+            else:
+                pb = GdkPixbuf.Pixbuf.new_from_file(fpath)
         except Exception as ex:
             print("Image error:", ex)
             return self.open_text(fpath)
-        w, h = pb.get_width(), pb.get_height()
-        if max(w, h) > 2200:
-            s = 2200 / max(w, h)
-            pb = pb.scale_simple(int(w * s), int(h * s), GdkPixbuf.InterpType.BILINEAR)
         img = Gtk.Image.new_from_pixbuf(pb)
         scroll = Gtk.ScrolledWindow()
         scroll.add(img)
@@ -1394,30 +1527,38 @@ class ProjectPanel(Gtk.Box):
         self.audio_state[vbox] = (player, timer_id, bus, handler_id)
         self.make_tab(vbox, fpath, vbox)
 
+    def _cleanup_audio_widget(self, widget):
+        astate = self.audio_state.pop(widget, None)
+        if not astate:
+            return
+        player, timer_id, bus, handler_id = astate
+        if timer_id:
+            GLib.source_remove(timer_id)
+        try:
+            bus.remove_signal_watch()
+            bus.disconnect(handler_id)
+            player.set_state(Gst.State.NULL)
+        except Exception:
+            pass
+        if player in self.players:
+            self.players.remove(player)
+
     def close_file_tab(self, btn, fpath, quiet=False):
+        entry = self.ed_paths.get(fpath)
+        doc = self.docs.get(entry[0]) if entry else None
+        if doc is not None:
+            if not quiet and self._try_close_doc(doc, fpath) == 'abort':
+                return
+            fpath = doc.path
         widget = self.open_widgets.pop(fpath, None)
         if widget:
             self.ed_tabs.remove_page(self.ed_tabs.page_num(widget))
         entry = self.ed_paths.pop(fpath, None)
         if entry:
-            doc = self.docs.pop(entry[0], None)
-            if doc:
-                doc.cancel_autosave()
+            self.docs.pop(entry[0], None)
         if widget:
             self.tab_labels.pop(widget, None)
-        astate = self.audio_state.pop(widget, None) if widget else None
-        if astate:
-            player, timer_id, bus, handler_id = astate
-            if timer_id:
-                GLib.source_remove(timer_id)
-            try:
-                bus.remove_signal_watch()
-                bus.disconnect(handler_id)
-                player.set_state(Gst.State.NULL)
-            except Exception:
-                pass
-            if player in self.players:
-                self.players.remove(player)
+            self._cleanup_audio_widget(widget)
         self._apply_editor_visibility()
         self.update_compact()
 
@@ -1481,6 +1622,136 @@ class ProjectPanel(Gtk.Box):
             pass
         return False
 
+    # ---------------- document close lifecycle ----------------
+    def _doc_text(self, doc):
+        return doc.buffer.get_text(doc.buffer.get_start_iter(),
+                                   doc.buffer.get_end_iter(), False)
+
+    def _try_close_doc(self, doc, fpath):
+        """Central close state machine (RA-001/RA-002).
+
+        Returns 'close' when it is safe to remove the tab, 'abort' when
+        the user cancelled (the tab must stay open).
+        """
+        if doc.deleted:
+            if not doc.dirty:
+                return 'close'
+            resp = self._deleted_dialog(doc)
+            if resp == Gtk.ResponseType.YES:
+                try:
+                    atomic_write(doc.path, self._doc_text(doc))
+                except OSError as ex:
+                    print("Could not recreate:", ex)
+                    return 'abort'
+                doc.recreate()
+                self.refresh_tree()
+                return 'close'
+            if resp == Gtk.ResponseType.NO:
+                return 'close' if self._save_as_doc(doc) else 'abort'
+            if resp == Gtk.ResponseType.APPLY:
+                return 'close'
+            return 'abort'
+        if doc.conflict:
+            resp = self._conflict_close_dialog(doc)
+            if resp == Gtk.ResponseType.YES:
+                if not self.save_buffer(doc.buffer):
+                    return 'abort'
+            elif resp == Gtk.ResponseType.NO:
+                self.reload_buffer(doc.buffer, doc.path)
+            else:
+                return 'abort'
+            return 'close'
+        if doc.dirty:
+            if not self.save_buffer(doc.buffer):
+                resp = self._save_failed_dialog(os.path.basename(doc.path))
+                if resp == Gtk.ResponseType.YES:
+                    if not self.save_buffer(doc.buffer):
+                        return 'abort'
+                elif resp == Gtk.ResponseType.NO:
+                    return 'close'
+                else:
+                    return 'abort'
+        return 'close'
+
+    def _deleted_dialog(self, doc):
+        dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                message_type=Gtk.MessageType.WARNING,
+                                buttons=Gtk.ButtonsType.NONE,
+                                text="%s was deleted externally" % os.path.basename(doc.path),
+                                secondary_text="You have unsaved edits that would be lost.")
+        dlg.add_button("Recreate file", Gtk.ResponseType.YES)
+        dlg.add_button("Save As…", Gtk.ResponseType.NO)
+        dlg.add_button("Discard", Gtk.ResponseType.APPLY)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        resp = dlg.run()
+        dlg.destroy()
+        return resp
+
+    def _conflict_close_dialog(self, doc):
+        dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                message_type=Gtk.MessageType.WARNING,
+                                buttons=Gtk.ButtonsType.NONE,
+                                text="%s has an unresolved conflict" % os.path.basename(doc.path),
+                                secondary_text="The file changed externally while you have "
+                                               "unsaved edits. Decide before closing.")
+        dlg.add_button("Save local version", Gtk.ResponseType.YES)
+        dlg.add_button("Reload from disk", Gtk.ResponseType.NO)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        resp = dlg.run()
+        dlg.destroy()
+        return resp
+
+    def _save_failed_dialog(self, name):
+        dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                message_type=Gtk.MessageType.ERROR,
+                                buttons=Gtk.ButtonsType.NONE,
+                                text="Could not save %s" % name,
+                                secondary_text="Your changes are still in the editor.")
+        dlg.add_button("Retry", Gtk.ResponseType.YES)
+        dlg.add_button("Close anyway (discard)", Gtk.ResponseType.NO)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        resp = dlg.run()
+        dlg.destroy()
+        return resp
+
+    def _save_as_doc(self, doc):
+        dlg = Gtk.FileChooserDialog(title="Save As", transient_for=self.get_toplevel(),
+                                    action=Gtk.FileChooserAction.SAVE)
+        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                        Gtk.STOCK_SAVE, Gtk.ResponseType.OK)
+        dlg.set_current_name(os.path.basename(doc.path))
+        if dlg.run() != Gtk.ResponseType.OK:
+            dlg.destroy()
+            return False
+        new = dlg.get_filename()
+        dlg.destroy()
+        if not new:
+            return False
+        try:
+            atomic_write(new, self._doc_text(doc))
+        except OSError as ex:
+            print("Could not save as:", ex)
+            return False
+        self._migrate_doc_path(doc, new)
+        doc.save_as(new)
+        self._update_tab_ui(doc.buffer)
+        return True
+
+    def _migrate_doc_path(self, doc, new_path):
+        old = doc.path
+        if old in self.open_widgets:
+            self.open_widgets[new_path] = self.open_widgets.pop(old)
+        if old in self.ed_paths:
+            self.ed_paths[new_path] = self.ed_paths.pop(old)
+        doc.path = new_path
+
+    def request_close(self):
+        """Resolve every open document; False aborts the close."""
+        for doc in list(self.docs.values()):
+            if self._try_close_doc(doc, doc.path) == 'abort':
+                return False
+        return True
+
     # ---------------- saving ----------------
     def on_buffer_changed(self, buf):
         if self._reloading:
@@ -1531,7 +1802,10 @@ class ProjectPanel(Gtk.Box):
         if not lbl:
             return
         name = os.path.basename(doc.path)
-        if doc.deleted:
+        if doc.deleted and doc.dirty:
+            lbl.set_text(name + " ⚠")
+            lbl.set_tooltip_text("Deleted externally — you have unsaved changes")
+        elif doc.deleted:
             lbl.set_text(name + " ⚠")
             lbl.set_tooltip_text("Deleted externally")
         elif doc.conflict:
@@ -1569,8 +1843,14 @@ class ProjectPanel(Gtk.Box):
         if self._shutdown:
             return
         self._shutdown = True
-        for doc in self.docs.values():
-            doc.cancel_autosave()
+        for doc in list(self.docs.values()):
+            if doc.dirty and not doc.deleted and not doc.conflict:
+                try:
+                    self.save_buffer(doc.buffer)
+                except Exception:
+                    pass
+        for widget in list(self.audio_state):
+            self._cleanup_audio_widget(widget)
         for mon in self.monitors.values():
             try:
                 mon.cancel()
@@ -1667,6 +1947,12 @@ class MiniIDE(Gtk.Window):
             panel.shutdown()
         Gtk.main_quit()
 
+    def on_delete_event(self, w, ev):
+        for panel in list(self.panels):
+            if not panel.request_close():
+                return True
+        return False
+
     # ---------------- multitasking ----------------
     def on_multitask_click(self, btn):
         if self.mode != "normal":
@@ -1685,7 +1971,11 @@ class MiniIDE(Gtk.Window):
         if n is not None:
             self.max_projects = n
         if len(self.panels) > self.max_projects:
-            for p in self.panels[self.max_projects:]:
+            extra = self.panels[self.max_projects:]
+            for p in extra:
+                if not p.request_close():
+                    return
+            for p in extra:
                 p.shutdown()
             self.panels = self.panels[:self.max_projects]
         self.main_panel.set_layout("compact")
@@ -1706,6 +1996,9 @@ class MiniIDE(Gtk.Window):
             dlg.destroy()
             if resp != Gtk.ResponseType.YES:
                 return
+            for p in extra:
+                if not p.request_close():
+                    return
             for p in extra:
                 p.shutdown()
             self.panels = [self.main_panel]
@@ -1770,6 +2063,8 @@ class MiniIDE(Gtk.Window):
         resp = dlg.run()
         dlg.destroy()
         if resp != Gtk.ResponseType.YES:
+            return
+        if not panel.request_close():
             return
         panel.shutdown()
         self.panels.remove(panel)
@@ -1871,6 +2166,7 @@ if __name__ == "__main__":
     if not folder:
         sys.exit(0)
     win = MiniIDE(folder)
+    win.connect("delete-event", win.on_delete_event)
     win.connect("destroy", win.on_destroy)
     win.show_all()
     if win.main_panel.ed_tabs.get_n_pages() == 0:
