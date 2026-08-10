@@ -473,8 +473,7 @@ class ProjectPanel(Gtk.Box):
         return False
 
     def term_paste(self, term):
-        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).request_text(
-            lambda clip, text: term.feed_child(text.encode("utf-8")) if text else None)
+        term.paste_clipboard()
 
     def on_term_btn(self, term, ev):
         if ev.button != 3:
