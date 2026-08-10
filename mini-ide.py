@@ -39,10 +39,26 @@ CSV_COLORS = ["#2E5E3E", "#1F4E6E", "#5E5E1F", "#6E3E1F", "#4A2E6E"]
 VSC_CSS = b"""
 window { background-color: #121314; }
 box, paned, scrolledwindow, notebook { background-color: #121314; }
-headerbar { background-color: #191A1B; min-height: 0px; padding: 2px 4px; }
-headerbar:backdrop { background-color: #191A1B; }
+box.titlebar { background-color: transparent; background-image: none; }
+headerbar box { background-color: transparent; background-image: none; }
+box.titlebar button {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 4px;
+    color: #D4D4D4;
+    min-width: 30px;
+    min-height: 24px;
+    padding: 0px 6px;
+}
+box.titlebar button:hover { background-color: rgba(255,255,255,0.12); }
+box.titlebar button:active { background-color: rgba(100,150,255,0.18); }
+box.titlebar label.title, box.titlebar label.subtitle { background-color: transparent; background-image: none; color: #BFBFBF; }
+headerbar { background-color: #191A1B; background-image: none; min-height: 0px; padding: 2px 4px; }
+headerbar:backdrop { background-color: #191A1B; background-image: none; }
 headerbar button {
     background-color: #242526;
+    background-image: none;
     color: #D4D4D4;
     border: 1px solid #2A2B2C;
     border-radius: 4px;
@@ -54,19 +70,20 @@ headerbar button:hover { background-color: rgba(255,255,255,0.12); border-color:
 headerbar button:active { background-color: rgba(100,150,255,0.18); border-color: #3994BC; }
 headerbar button:backdrop { background-color: #191A1B; color: #8C8C8C; }
 headerbar label, headerbar .title, headerbar .subtitle, headerbar button label { color: #BFBFBF; font-size: 13px; text-shadow: none; }
-headerbar .title { background-color: transparent; }
+headerbar .title { background-color: transparent; background-image: none; }
 headerbar button.titlebutton, headerbar button.titlebutton label { color: #D4D4D4; }
-headerbar button.titlebutton { background-color: #242526; border: 1px solid #2A2B2C; border-radius: 4px; margin: 1px; }
-headerbar button.titlebutton:hover { background-color: rgba(255,255,255,0.12); border-color: #3A3B3C; }
+headerbar button.titlebutton { background-color: transparent; background-image: none; border: none; border-radius: 4px; margin: 1px; min-width: 30px; min-height: 24px; }
+headerbar button.titlebutton:hover { background-color: rgba(255,255,255,0.12); }
 treeview { background-color: #191A1B; color: #BFBFBF; }
 treeview:hover { background-color: rgba(255,255,255,0.06); }
 treeview:selected { background-color: #094771; color: #EDEDED; }
 treeview:selected:backdrop { background-color: #2C2D2E; color: #BFBFBF; }
 treeview.view { border-color: #191A1B; }
-paned > separator { background-color: #2A2B2C; }
+paned > separator { background-color: #3A3B3C; min-width: 2px; min-height: 2px; }
 button {
     color: #BFBFBF;
     background-color: #191A1B;
+    background-image: none;
     border: 1px solid #2A2B2C;
     border-radius: 4px;
     min-height: 22px;
@@ -79,7 +96,7 @@ scale trough { background-color: #2A2B2C; }
 .dim-label { color: #8C8C8C; }
 label { color: #BFBFBF; }
 notebook { background-color: #191A1B; }
-notebook header { background-color: #191A1B; border-color: #2A2B2C; min-height: 34px; }
+notebook header { background-color: #191A1B; background-image: none; border-color: #2A2B2C; border-bottom: 1px solid #2A2B2C; min-height: 34px; }
 notebook tab {
     background-color: #191A1B;
     min-height: 34px;
@@ -93,7 +110,8 @@ notebook tab:active, notebook tab:checked {
     border-bottom: 3px solid #3994BC;
 }
 notebook tab:active label, notebook tab:checked label { color: #EDEDED; }
-notebook tab button { min-width: 20px; min-height: 20px; padding: 0px; }
+notebook tab button { min-width: 20px; min-height: 20px; padding: 0px; border-radius: 4px; }
+notebook tab button:hover { background-color: rgba(255,255,255,0.15); }
 .icon-btn { min-width: 28px; min-height: 28px; padding: 4px; }
 label, button, headerbar, notebook, treeview { text-shadow: none; -gtk-icon-shadow: none; }
 .root-drop { border: 2px dashed #3994BC; background-color: #191A1B; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
