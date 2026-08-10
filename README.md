@@ -61,7 +61,7 @@ Multiple instances can be opened (each folder in its own window).
 
 - Python 3 + PyGObject (Gtk 3, GtkSource 4, VTE 2.91)
 - Optional: Poppler (PDF), GStreamer (audio), Cairo
-- opencode binary — resolved from: `OPENCODE` env var → `PATH` → `~/.opencode/bin/opencode`
+- opencode binary — resolved from: `MINI_IDE_OPENCODE` env var → `PATH` → `~/.opencode/bin/opencode`
 - Material Icon Theme 5.37.0 extension in VS Code (`pkief.material-icon-theme`) for icons (optional, has fallback)
 
 ## Power profiles (optional)

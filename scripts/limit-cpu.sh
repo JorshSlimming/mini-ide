@@ -1,52 +1,80 @@
 #!/bin/bash
 # limit-cpu.sh — CPU power profiles (AMD p-state)
 # Usage: sudo limit-cpu.sh [mild|fresh|full|cycle|status]
-#   mild   (default): boost OFF, balance_power, max 3.5 GHz  <- recommended
-#   fresh           : boost OFF, power,          max 3.0 GHz  <- maximum savings
-#   full            : boost ON,  balance_performance, 4.63 GHz
+#   mild   (default): boost OFF, balance_power, 75% of max freq  <- recommended
+#   fresh           : boost OFF, power,          65% of max freq  <- maximum savings
+#   full            : boost ON,  balance_performance, max freq
 #   cycle           : cycles full -> mild -> fresh -> full
 #   status          : shows the current profile
 CPS="/sys/devices/system/cpu/cpufreq"
 MODE="${1:-mild}"
+POLICY0="$CPS/policy0"
 
-set_cpu() {  # $1=boost(0/1) $2=epp $3=max_khz
-    echo "$1" > "$CPS/boost" 2>/dev/null
+if [ ! -d "$CPS" ] || [ ! -e "$CPS/boost" ] || [ ! -e "$POLICY0/scaling_max_freq" ]; then
+    echo "ERROR: cpufreq sysfs not available ($CPS). Unsupported machine." >&2
+    exit 1
+fi
+
+HW_MAX=$(cat "$POLICY0/cpuinfo_max_freq" 2>/dev/null)
+case "$HW_MAX" in
+    ''|*[!0-9]*)
+        echo "ERROR: cannot read cpuinfo_max_freq." >&2
+        exit 1
+        ;;
+esac
+[ "$HW_MAX" -gt 0 ] || { echo "ERROR: invalid cpuinfo_max_freq ($HW_MAX)." >&2; exit 1; }
+
+pct_max() { awk -v h="$HW_MAX" -v p="$1" 'BEGIN { printf "%d", h * p }'; }
+
+MILD_MAX=$(pct_max 0.75)
+FRESH_MAX=$(pct_max 0.65)
+FULL_MAX="$HW_MAX"
+
+fail() { echo "ERROR: could not apply profile '$MODE' (run as root? unsupported driver?)." >&2; exit 1; }
+
+apply() {  # $1=boost $2=epp $3=max_khz $4=label
+    echo "$1" > "$CPS/boost" || fail
     for p in "$CPS"/policy*; do
-        echo "$2" > "$p/energy_performance_preference" 2>/dev/null
-        echo "$3" > "$p/scaling_max_freq" 2>/dev/null
+        if [ -w "$p/energy_performance_preference" ]; then
+            echo "$2" > "$p/energy_performance_preference" 2>/dev/null || fail
+        fi
+        if [ -w "$p/scaling_max_freq" ]; then
+            echo "$3" > "$p/scaling_max_freq" 2>/dev/null || fail
+        fi
     done
+    got=$(cat "$POLICY0/scaling_max_freq" 2>/dev/null)
+    case "$got" in
+        ''|*[!0-9]*) fail ;;
+    esac
+    ok=$(awk -v g="$got" -v w="$3" 'BEGIN { d = g - w; if (d < 0) d = -d; print (d <= 100000) ? 1 : 0 }')
+    [ "$ok" = "1" ] || fail
+    echo "PROFILE: $4"
 }
 
 current() {
-    EPP=$(cat "$CPS/policy0/energy_performance_preference" 2>/dev/null)
+    EPP=$(cat "$POLICY0/energy_performance_preference" 2>/dev/null)
     BOOST=$(cat "$CPS/boost" 2>/dev/null)
-    MAX=$(cat "$CPS/policy0/scaling_max_freq" 2>/dev/null)
+    MAX=$(cat "$POLICY0/scaling_max_freq" 2>/dev/null)
 }
 
 case "$MODE" in
     mild)
-        set_cpu 0 balance_power 3500000
-        echo "PROFILE: medium (boost OFF, balance_power, 3.5 GHz)"
+        apply 0 balance_power "$MILD_MAX" "medium (boost OFF, balance_power, $((MILD_MAX/1000)) MHz)"
         ;;
     fresh)
-        set_cpu 0 power 3000000
-        echo "PROFILE: minimum (boost OFF, power, 3.0 GHz)"
+        apply 0 power "$FRESH_MAX" "minimum (boost OFF, power, $((FRESH_MAX/1000)) MHz)"
         ;;
     full)
-        set_cpu 1 balance_performance 4629000
-        echo "PROFILE: maximum (boost ON, balance_performance, 4.63 GHz)"
+        apply 1 balance_performance "$FULL_MAX" "maximum (boost ON, balance_performance, $((FULL_MAX/1000)) MHz)"
         ;;
     cycle)
         current
         if [ "$EPP" = "balance_performance" ]; then
-            set_cpu 0 balance_power 3500000
-            echo "PROFILE: medium (boost OFF, balance_power, 3.5 GHz)"
+            apply 0 balance_power "$MILD_MAX" "medium (boost OFF, balance_power, $((MILD_MAX/1000)) MHz)"
         elif [ "$EPP" = "balance_power" ]; then
-            set_cpu 0 power 3000000
-            echo "PROFILE: minimum (boost OFF, power, 3.0 GHz)"
+            apply 0 power "$FRESH_MAX" "minimum (boost OFF, power, $((FRESH_MAX/1000)) MHz)"
         else
-            set_cpu 1 balance_performance 4629000
-            echo "PROFILE: maximum (boost ON, balance_performance, 4.63 GHz)"
+            apply 1 balance_performance "$FULL_MAX" "maximum (boost ON, balance_performance, $((FULL_MAX/1000)) MHz)"
         fi
         ;;
     status)
@@ -54,6 +82,7 @@ case "$MODE" in
         echo "epp=$EPP boost=$BOOST max=$((MAX/1000)) MHz"
         ;;
     *)
-        echo "Usage: $0 [mild|fresh|full|cycle|status]"
+        echo "Usage: $0 [mild|fresh|full|cycle|status]" >&2
+        exit 2
         ;;
 esac

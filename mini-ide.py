@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # mini-ide v8: modo multitasking (hasta 3 proyectos en columnas) + modo normal.
-import sys, os, shutil, csv, json, subprocess, warnings
-warnings.filterwarnings("ignore")
+import sys, os, shutil, csv, json, subprocess, tempfile, math
+from itertools import islice
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -25,7 +25,9 @@ except Exception:
     pass
 
 FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-OPENCODE = shutil.which("opencode") or os.environ.get("MINI_IDE_OPENCODE") or os.path.expanduser("~/.opencode/bin/opencode")
+OPENCODE = (os.environ.get("MINI_IDE_OPENCODE")
+            or shutil.which("opencode")
+            or os.path.expanduser("~/.opencode/bin/opencode"))
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
@@ -35,6 +37,46 @@ IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "av
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}
 CSV_EXT = {"csv", "tsv"}
 CSV_COLORS = ["#2E5E3E", "#1F4E6E", "#5E5E1F", "#6E3E1F", "#4A2E6E"]
+
+WARN_LARGE = 5 * 1024 * 1024
+MAX_LARGE = 25 * 1024 * 1024
+MAX_PDF_PIXELS = 30_000_000
+
+def atomic_write(path, text):
+    d = os.path.dirname(path) or "."
+    try:
+        mode = os.stat(path).st_mode & 0o777
+    except OSError:
+        mode = 0o644
+    fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), dir=d)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+def validate_child_name(name):
+    name = name.strip()
+    if not name or name in {".", ".."}:
+        return None
+    if os.path.basename(name) != name:
+        return None
+    return name
+
+def looks_binary(path, sample=8192):
+    try:
+        with open(path, "rb") as f:
+            return b"\x00" in f.read(sample)
+    except OSError:
+        return False
 
 VSC_CSS = b"""
 window { background-color: #121314; }
@@ -204,7 +246,6 @@ class ProjectPanel(Gtk.Box):
         self.root = os.path.abspath(root)
         self.layout = layout
         self.on_close = on_close
-        self._save_id = None
         self._refresh_id = None
         self._pending = None
         self.monitors = {}
@@ -214,6 +255,15 @@ class ProjectPanel(Gtk.Box):
         self.players = []
         self.opencode_pid = None
         self._compact_tabbed = False
+        self._shutdown = False
+        self._reloading = False
+        self.save_ids = {}
+        self.doc_state = {}
+        self.doc_conflict = {}
+        self.doc_deleted = {}
+        self.saved_snap = {}
+        self.tab_labels = {}
+        self.audio_state = {}
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -285,7 +335,8 @@ class ProjectPanel(Gtk.Box):
         btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
 
         self.path_lbl = Gtk.Label(xalign=0)
-        self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>" % self.root)
+        self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>"
+                                 % GLib.markup_escape_text(self.root))
         btn_copy = Gtk.Button()
         _copy_img = Gtk.Image.new_from_icon_name("edit-copy", Gtk.IconSize.LARGE_TOOLBAR)
         _copy_img.set_pixel_size(24)
@@ -370,7 +421,7 @@ class ProjectPanel(Gtk.Box):
             self.main_v.pack2(self.bottom_h, True, False)
             bar = Gtk.Box(spacing=4)
             lbl = Gtk.Label(xalign=0)
-            lbl.set_markup("<b>%s</b>" % os.path.basename(self.root))
+            lbl.set_markup("<b>%s</b>" % GLib.markup_escape_text(os.path.basename(self.root)))
             bar.pack_start(lbl, True, True, 4)
             if self.on_close:
                 bx = Gtk.Button(label="✕")
@@ -499,12 +550,31 @@ class ProjectPanel(Gtk.Box):
         return True
 
     def spawn_opencode(self):
+        if not OPENCODE or not os.path.isfile(OPENCODE) or not os.access(OPENCODE, os.X_OK):
+            try:
+                dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                        message_type=Gtk.MessageType.ERROR,
+                                        buttons=Gtk.ButtonsType.OK,
+                                        text="opencode not found",
+                                        secondary_text="Set MINI_IDE_OPENCODE to a valid path "
+                                                       "or install opencode in PATH.")
+                dlg.run()
+                dlg.destroy()
+            except Exception:
+                pass
+            return
+
+        def on_spawn(term, pid, err, data=None):
+            self.opencode_pid = int(pid) if pid else None
+            if err is not None:
+                print("opencode spawn error:", err)
+
         try:
-            ok, pid = self.opencode_term.spawn_sync(Vte.PtyFlags.DEFAULT, self.root,
-                                                    [OPENCODE], [], GLib.SpawnFlags.DEFAULT,
-                                                    None, None, None)
-            self.opencode_pid = pid if ok else None
-        except Exception:
+            self.opencode_term.spawn_async(Vte.PtyFlags.DEFAULT, self.root, [OPENCODE], None,
+                                           GLib.SpawnFlags.DEFAULT, None, None, 10000,
+                                           None, on_spawn, None)
+        except Exception as ex:
+            print("opencode spawn error:", ex)
             self.opencode_pid = None
 
     def on_term_selection(self, term):
@@ -579,9 +649,90 @@ class ProjectPanel(Gtk.Box):
             pass
 
     def on_fs_changed(self, mon, file, other, event):
+        try:
+            p = file.get_path()
+        except Exception:
+            p = None
+        if p:
+            self._handle_fs_event(p, event)
         if self._refresh_id:
             GLib.source_remove(self._refresh_id)
         self._refresh_id = GLib.timeout_add(350, self._do_refresh)
+
+    def _handle_fs_event(self, path, event):
+        gone = event in (Gio.FileMonitorEvent.DELETED, Gio.FileMonitorEvent.MOVED_OUT)
+        if path in self.monitors and gone:
+            try:
+                self.monitors.pop(path).cancel()
+            except Exception:
+                pass
+            return
+        if path not in self.open_widgets:
+            return
+        entry = self.ed_paths.get(path)
+        if not entry:
+            return
+        buf = entry[0]
+        if gone:
+            if os.path.exists(path):
+                return
+            self.doc_deleted[buf] = True
+            self.doc_state[buf] = False
+            tid = self.save_ids.pop(buf, None)
+            if tid:
+                GLib.source_remove(tid)
+            self._update_tab_ui(buf)
+            return
+        try:
+            st = os.stat(path)
+            disk = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return
+        if self.saved_snap.get(path) == disk:
+            return
+        if not self.doc_state.get(buf):
+            self.reload_buffer(buf, path)
+        elif not self.doc_conflict.get(buf):
+            self.doc_conflict[buf] = True
+            tid = self.save_ids.pop(buf, None)
+            if tid:
+                GLib.source_remove(tid)
+            self._update_tab_ui(buf)
+            self._conflict_dialog(buf, path)
+
+    def _conflict_dialog(self, buf, path):
+        try:
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.WARNING,
+                                    buttons=Gtk.ButtonsType.NONE,
+                                    text="%s changed outside Mini-IDE" % os.path.basename(path),
+                                    secondary_text="You have unsaved edits. Autosave is "
+                                                   "suspended until you decide.")
+            dlg.add_button("Reload from disk", Gtk.ResponseType.YES)
+            dlg.add_button("Keep editor version", Gtk.ResponseType.NO)
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                self.reload_buffer(buf, path)
+        except Exception:
+            pass
+
+    def reload_buffer(self, buf, path):
+        try:
+            with open(path, 'r', errors='replace') as f:
+                text = f.read()
+        except OSError:
+            return
+        self._reloading = True
+        try:
+            buf.set_text(text)
+        finally:
+            self._reloading = False
+        self.doc_state[buf] = False
+        self.doc_conflict.pop(buf, None)
+        st = os.stat(path)
+        self.saved_snap[path] = (st.st_mtime_ns, st.st_size)
+        self._update_tab_ui(buf)
 
     def _do_refresh(self):
         self._refresh_id = None
@@ -692,6 +843,27 @@ class ProjectPanel(Gtk.Box):
         elif fpath:
             self.open_file(fpath)
 
+    def path_inside_root(self, target):
+        try:
+            root_real = os.path.realpath(self.root)
+            target_real = os.path.realpath(target)
+            return os.path.commonpath([root_real, target_real]) == root_real
+        except (OSError, ValueError):
+            return False
+
+    def _name_error_dialog(self, name):
+        try:
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.ERROR,
+                                    buttons=Gtk.ButtonsType.OK,
+                                    text="Invalid name",
+                                    secondary_text="Use a single file or folder name "
+                                                   "(no paths, no '..', no '/'): '%s'" % name)
+            dlg.run()
+            dlg.destroy()
+        except Exception:
+            pass
+
     def on_name_edited(self, renderer, path_str, new_text):
         if self._pending:
             it, kind, base = self._pending
@@ -701,25 +873,48 @@ class ProjectPanel(Gtk.Box):
             except Exception:
                 cur_path = None
             if cur_path == path_str:
-                name = new_text.strip()
+                name = validate_child_name(new_text)
                 if not name:
                     try:
                         if self.store.iter_is_valid(it):
                             self.store.remove(it)
                     except Exception:
                         pass
+                    self._name_error_dialog(new_text)
                     return
                 p = os.path.join(base, name)
+                if not self.path_inside_root(p):
+                    try:
+                        if self.store.iter_is_valid(it):
+                            self.store.remove(it)
+                    except Exception:
+                        pass
+                    self._name_error_dialog(new_text)
+                    return
                 try:
                     if kind == "newfile":
-                        with open(p, 'w') as f:
-                            f.write("")
+                        with open(p, "x", encoding="utf-8"):
+                            pass
                     else:
-                        os.makedirs(p, exist_ok=True)
+                        os.makedirs(p, exist_ok=False)
                     self.refresh_tree()
                     self.select_path(p)
                     if kind == "newfile":
                         self.open_file(p)
+                except FileExistsError:
+                    try:
+                        if self.store.iter_is_valid(it):
+                            self.store.remove(it)
+                    except Exception:
+                        pass
+                    dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                            message_type=Gtk.MessageType.ERROR,
+                                            buttons=Gtk.ButtonsType.OK,
+                                            text="Already exists",
+                                            secondary_text="'%s' already exists and was not "
+                                                           "modified." % name)
+                    dlg.run()
+                    dlg.destroy()
                 except OSError as ex:
                     print("Error:", ex)
                 return
@@ -728,17 +923,31 @@ class ProjectPanel(Gtk.Box):
             return
         kind = self.store.get_value(it, 3)
         fpath = self.store.get_value(it, 2)
-        name = new_text.strip()
+        name = validate_child_name(new_text)
         if not name or kind not in ("file", "folder"):
+            if name is None:
+                self._name_error_dialog(new_text)
             return
         newp = os.path.join(os.path.dirname(fpath), name)
-        if newp != fpath and not os.path.exists(newp):
-            try:
-                os.rename(fpath, newp)
-                self.refresh_tree()
-                self.select_path(newp)
-            except OSError as ex:
-                print("Error:", ex)
+        if newp != fpath and not os.path.exists(newp) and self.path_inside_root(newp):
+            self.rename_path(fpath, newp)
+
+    def rename_path(self, old, new):
+        try:
+            os.rename(old, new)
+        except OSError as ex:
+            print("Error:", ex)
+            return
+        if old in self.open_widgets:
+            widget = self.open_widgets.pop(old)
+            self.open_widgets[new] = widget
+            entry = self.ed_paths.pop(old)
+            self.ed_paths[new] = entry
+            self.buf_path[entry[0]] = new
+            self.saved_snap[new] = self.saved_snap.pop(old, None)
+            self._update_tab_ui(entry[0])
+        self.refresh_tree()
+        self.select_path(new)
 
     def on_editing_canceled(self, renderer, path_str):
         if self._pending:
@@ -787,6 +996,27 @@ class ProjectPanel(Gtk.Box):
         self.tree.set_cursor(self.store.get_path(row), col, True)
         GLib.idle_add(lambda: self.r_name.set_property("editable", False))
 
+    def _copy_dest_safe(self, src, dst):
+        try:
+            src_real = os.path.realpath(src)
+            dst_real = os.path.realpath(dst)
+            return os.path.commonpath([src_real, dst_real]) != src_real
+        except (OSError, ValueError):
+            return False
+
+    def _copy_error_dialog(self, name):
+        try:
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.ERROR,
+                                    buttons=Gtk.ButtonsType.OK,
+                                    text="Copy refused",
+                                    secondary_text="Cannot copy '%s' into itself or a "
+                                                   "descendant folder." % name)
+            dlg.run()
+            dlg.destroy()
+        except Exception:
+            pass
+
     def on_drop(self, tree, ctx, x, y, data, info, time):
         dest = self.root
         info2 = tree.get_path_at_pos(int(x), int(y))
@@ -807,6 +1037,9 @@ class ProjectPanel(Gtk.Box):
                 dst = os.path.join(dest, os.path.basename(src))
                 if os.path.exists(dst) or not os.path.exists(src):
                     continue
+                if os.path.isdir(src) and not self._copy_dest_safe(src, dst):
+                    self._copy_error_dialog(os.path.basename(src))
+                    continue
                 try:
                     if os.path.isdir(src):
                         shutil.copytree(src, dst)
@@ -826,6 +1059,9 @@ class ProjectPanel(Gtk.Box):
                     continue
                 dst = os.path.join(self.root, os.path.basename(src))
                 if os.path.exists(dst) or not os.path.exists(src):
+                    continue
+                if os.path.isdir(src) and not self._copy_dest_safe(src, dst):
+                    self._copy_error_dialog(os.path.basename(src))
                     continue
                 try:
                     if os.path.isdir(src):
@@ -859,9 +1095,11 @@ class ProjectPanel(Gtk.Box):
                     shutil.rmtree(fpath)
                 else:
                     os.remove(fpath)
-                self.refresh_tree()
             except OSError as ex:
                 print("Error:", ex)
+                return
+            self.close_file_tab(None, fpath, quiet=True)
+            self.refresh_tree()
 
     # ---------------- visores ----------------
     def open_file(self, fpath):
@@ -887,6 +1125,7 @@ class ProjectPanel(Gtk.Box):
         tab.pack_start(close, False, False, 0)
         tab.show_all()
         self.open_widgets[fpath] = content_widget
+        self.tab_labels[content_widget] = lbl
         self.ed_tabs.append_page(widget, tab)
         self.ed_tabs.set_current_page(self.ed_tabs.page_num(widget))
         self.editor_pane.show()
@@ -898,6 +1137,62 @@ class ProjectPanel(Gtk.Box):
             buf, page = self.ed_paths[fpath]
             self.ed_tabs.set_current_page(self.ed_tabs.page_num(page))
             self.editor_pane.show_all()
+            return
+        try:
+            size = os.path.getsize(fpath)
+        except OSError as ex:
+            print("Could not open:", ex)
+            return
+        if size > MAX_LARGE:
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.WARNING,
+                                    buttons=Gtk.ButtonsType.NONE,
+                                    text="File too large to open in the editor",
+                                    secondary_text="%.1f MB (%s). Open it externally?"
+                                                   % (size / 1048576, os.path.basename(fpath)))
+            dlg.add_button("Open externally", Gtk.ResponseType.YES)
+            dlg.add_button("Cancel", Gtk.ResponseType.NO)
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                try:
+                    subprocess.Popen(["xdg-open", fpath],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            return
+        readonly = False
+        if size > WARN_LARGE:
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.WARNING,
+                                    buttons=Gtk.ButtonsType.NONE,
+                                    text="Large file: %s" % os.path.basename(fpath),
+                                    secondary_text="%.1f MB. Open read-only?"
+                                                   % (size / 1048576))
+            dlg.add_button("Open read-only", Gtk.ResponseType.YES)
+            dlg.add_button("Cancel", Gtk.ResponseType.NO)
+            resp = dlg.run()
+            dlg.destroy()
+            if resp != Gtk.ResponseType.YES:
+                return
+            readonly = True
+        if looks_binary(fpath):
+            dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                    message_type=Gtk.MessageType.WARNING,
+                                    buttons=Gtk.ButtonsType.NONE,
+                                    text="Binary file: %s" % os.path.basename(fpath),
+                                    secondary_text="This file cannot be edited as text "
+                                                   "(it would corrupt the file). Open it externally?")
+            dlg.add_button("Open externally", Gtk.ResponseType.YES)
+            dlg.add_button("Cancel", Gtk.ResponseType.NO)
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                try:
+                    subprocess.Popen(["xdg-open", fpath],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
             return
         try:
             with open(fpath, 'r', errors='replace') as f:
@@ -916,6 +1211,8 @@ class ProjectPanel(Gtk.Box):
         view.set_tab_width(4)
         view.set_highlight_current_line(True)
         view.modify_font(Pango.FontDescription("Monospace 10"))
+        if readonly:
+            view.set_editable(False)
         scroll = Gtk.ScrolledWindow()
         scroll.add(view)
         scroll.show_all()
@@ -923,6 +1220,10 @@ class ProjectPanel(Gtk.Box):
         self.buf_path[buffer] = fpath
         buffer.connect("changed", self.on_buffer_changed)
         self.make_tab(scroll, fpath, scroll)
+        self.doc_state[buffer] = False
+        st = os.stat(fpath)
+        self.saved_snap[fpath] = (st.st_mtime_ns, st.st_size)
+        self._update_tab_ui(buffer)
 
     def open_table(self, fpath):
         if fpath in self.open_widgets:
@@ -932,12 +1233,16 @@ class ProjectPanel(Gtk.Box):
         delim = '\t' if fpath.rsplit(".", 1)[-1].lower() == "tsv" else ','
         try:
             with open(fpath, newline='', errors='replace') as f:
-                rows = list(csv.reader(f, delimiter=delim))
+                reader = csv.reader(f, delimiter=delim)
+                rows = list(islice(reader, 20001))
         except OSError as ex:
             print("Error:", ex)
             return
         if not rows:
             return self.open_text(fpath)
+        truncated = len(rows) > 20000
+        if truncated:
+            rows = rows[:20000]
         ncols = min(max(len(r) for r in rows[:500]), 60)
         store = Gtk.ListStore.new([str] * ncols)
         for r in rows[:20000]:
@@ -957,6 +1262,10 @@ class ProjectPanel(Gtk.Box):
         btn_text.connect("clicked", lambda w, p=fpath: self.text_from_table(p))
         bar = Gtk.Box(spacing=4)
         bar.pack_start(btn_text, False, False, 4)
+        if truncated:
+            note = Gtk.Label(xalign=0)
+            note.set_markup("<span size='small' color='#888888'>Showing first 20,000 rows</span>")
+            bar.pack_start(note, False, False, 4)
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         vbox.pack_start(bar, False, False, 2)
         vbox.pack_start(scroll, True, True, 0)
@@ -1013,14 +1322,18 @@ class ProjectPanel(Gtk.Box):
         def render():
             p = state["doc"].get_page(state["page"])
             w, h = p.get_size()
-            s = state["scale"]
+            scale = state["scale"]
+            if w * h * scale * scale > MAX_PDF_PIXELS:
+                scale = math.sqrt(MAX_PDF_PIXELS / (w * h))
             import cairo as _cairo
-            surface = _cairo.ImageSurface(_cairo.FORMAT_ARGB32, int(w * s), int(h * s))
+            surface = _cairo.ImageSurface(_cairo.FORMAT_ARGB32,
+                                          max(1, int(w * scale)), max(1, int(h * scale)))
             ctx = _cairo.Context(surface)
+            ctx.scale(scale, scale)
             p.render(ctx)
             pb = GdkPixbuf.Pixbuf.new_from_data(
                 surface.get_data(), GdkPixbuf.Colorspace.RGB, True, 8,
-                int(w * s), int(h * s), surface.get_stride())
+                int(w * scale), int(h * scale), surface.get_stride())
             img.set_from_pixbuf(pb)
             lbl.set_text("Page %d/%d" % (state["page"] + 1, state["doc"].get_n_pages()))
             scroll.get_vadjustment().set_value(0)
@@ -1106,11 +1419,11 @@ class ProjectPanel(Gtk.Box):
                 btn.set_active(False)
                 player.set_state(Gst.State.READY)
                 lbl.set_text("00:00 / 00:00")
-        bus.connect("message", on_eos)
+        handler_id = bus.connect("message", on_eos)
 
         def update():
-            pos, okp = player.query_position(Gst.Format.TIME)
-            dur, okd = player.query_duration(Gst.Format.TIME)
+            okp, pos = player.query_position(Gst.Format.TIME)
+            okd, dur = player.query_duration(Gst.Format.TIME)
             if okp and okd and dur > 0:
                 scale.set_range(0, dur / Gst.SECOND)
                 scale.set_value(pos / Gst.SECOND)
@@ -1120,7 +1433,7 @@ class ProjectPanel(Gtk.Box):
             elif okp:
                 lbl_time.set_text("%02d:%02d" % (pos // Gst.SECOND // 60, pos // Gst.SECOND % 60))
             return True
-        GLib.timeout_add(400, update)
+        timer_id = GLib.timeout_add(400, update)
         bar = Gtk.Box(spacing=6)
         bar.pack_start(btn_play, False, False, 2)
         bar.pack_start(btn_stop, False, False, 2)
@@ -1130,6 +1443,7 @@ class ProjectPanel(Gtk.Box):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         vbox.pack_start(bar, False, False, 8)
         vbox.show_all()
+        self.audio_state[vbox] = (player, timer_id, bus, handler_id)
         self.make_tab(vbox, fpath, vbox)
 
     def close_file_tab(self, btn, fpath, quiet=False):
@@ -1138,7 +1452,30 @@ class ProjectPanel(Gtk.Box):
             self.ed_tabs.remove_page(self.ed_tabs.page_num(widget))
         entry = self.ed_paths.pop(fpath, None)
         if entry:
-            self.buf_path.pop(entry[0], None)
+            buf = entry[0]
+            self.buf_path.pop(buf, None)
+            tid = self.save_ids.pop(buf, None)
+            if tid:
+                GLib.source_remove(tid)
+            self.doc_state.pop(buf, None)
+            self.doc_conflict.pop(buf, None)
+            self.doc_deleted.pop(buf, None)
+        self.saved_snap.pop(fpath, None)
+        if widget:
+            self.tab_labels.pop(widget, None)
+        astate = self.audio_state.pop(widget, None) if widget else None
+        if astate:
+            player, timer_id, bus, handler_id = astate
+            if timer_id:
+                GLib.source_remove(timer_id)
+            try:
+                bus.remove_signal_watch()
+                bus.disconnect(handler_id)
+                player.set_state(Gst.State.NULL)
+            except Exception:
+                pass
+            if player in self.players:
+                self.players.remove(player)
         self._apply_editor_visibility()
         self.update_compact()
 
@@ -1204,16 +1541,45 @@ class ProjectPanel(Gtk.Box):
 
     # ---------------- saving ----------------
     def on_buffer_changed(self, buf):
-        if not self.buf_path.get(buf):
+        if self._reloading:
             return
-        if self._save_id:
-            GLib.source_remove(self._save_id)
-        self._save_id = GLib.timeout_add(800, self._autosave)
+        path = self.buf_path.get(buf)
+        if not path:
+            return
+        self.doc_state[buf] = True
+        self.doc_conflict.pop(buf, None)
+        if self.doc_deleted.get(buf):
+            self._update_tab_ui(buf)
+            return
+        old = self.save_ids.pop(buf, None)
+        if old:
+            GLib.source_remove(old)
+        self.save_ids[buf] = GLib.timeout_add(800, self._autosave_buffer, buf)
+        self._update_tab_ui(buf)
 
-    def _autosave(self):
-        self._save_id = None
-        self.save_file()
+    def _autosave_buffer(self, buf):
+        self.save_ids.pop(buf, None)
+        self.save_buffer(buf)
         return False
+
+    def save_buffer(self, buf):
+        path = self.buf_path.get(buf)
+        if not path or self.doc_deleted.get(buf):
+            return False
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        try:
+            atomic_write(path, text)
+        except OSError as ex:
+            print("Could not save:", ex)
+            self.doc_state[buf] = True
+            self._update_tab_ui(buf)
+            return False
+        st = os.stat(path)
+        self.saved_snap[path] = (st.st_mtime_ns, st.st_size)
+        self.doc_state[buf] = False
+        self.doc_conflict.pop(buf, None)
+        self._update_tab_ui(buf)
+        return True
 
     def save_file(self, btn=None):
         page = self.ed_tabs.get_current_page()
@@ -1222,12 +1588,32 @@ class ProjectPanel(Gtk.Box):
         widget = self.ed_tabs.get_nth_page(page)
         for path, (buf, w) in self.ed_paths.items():
             if w is widget:
-                try:
-                    with open(path, 'w') as f:
-                        f.write(buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False))
-                except OSError as ex:
-                    print("Could not save:", ex)
+                self.save_buffer(buf)
                 break
+
+    def _update_tab_ui(self, buf):
+        path = self.buf_path.get(buf)
+        if not path:
+            return
+        entry = self.ed_paths.get(path)
+        if not entry:
+            return
+        lbl = self.tab_labels.get(entry[1])
+        if not lbl:
+            return
+        name = os.path.basename(path)
+        if self.doc_deleted.get(buf):
+            lbl.set_text(name + " ⚠")
+            lbl.set_tooltip_text("Deleted externally")
+        elif self.doc_conflict.get(buf):
+            lbl.set_text(name + " ⚠")
+            lbl.set_tooltip_text("Changed externally while you have unsaved edits")
+        elif self.doc_state.get(buf):
+            lbl.set_text(name + " ●")
+            lbl.set_tooltip_text("Modified — autosave pending")
+        else:
+            lbl.set_text(name)
+            lbl.set_tooltip_text("")
 
     def on_key(self, w, ev):
         k = Gdk.keyval_name(ev.keyval)
@@ -1251,11 +1637,27 @@ class ProjectPanel(Gtk.Box):
 
     def shutdown(self):
         """Mata opencode, terminales y audio del panel."""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        for buf, tid in list(self.save_ids.items()):
+            try:
+                GLib.source_remove(tid)
+            except Exception:
+                pass
+        self.save_ids.clear()
+        for mon in self.monitors.values():
+            try:
+                mon.cancel()
+            except Exception:
+                pass
+        self.monitors.clear()
         for p in self.players:
             try:
                 p.set_state(Gst.State.NULL)
             except Exception:
                 pass
+        self.players.clear()
         if self.opencode_pid:
             try:
                 os.kill(self.opencode_pid, 15)
@@ -1334,6 +1736,11 @@ class MiniIDE(Gtk.Window):
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
         save_recents(self.root)
+
+    def on_destroy(self, *args):
+        for panel in list(self.panels):
+            panel.shutdown()
+        Gtk.main_quit()
 
     # ---------------- multitasking ----------------
     def on_multitask_click(self, btn):
@@ -1539,7 +1946,7 @@ if __name__ == "__main__":
     if not folder:
         sys.exit(0)
     win = MiniIDE(folder)
-    win.connect("destroy", Gtk.main_quit)
+    win.connect("destroy", win.on_destroy)
     win.show_all()
     if win.main_panel.ed_tabs.get_n_pages() == 0:
         win.main_panel.editor_pane.hide()
