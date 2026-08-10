@@ -11,6 +11,8 @@ mkdir -p "$BIN" "$APPS" "$ICONDIR"
 
 cp "$SRC/mini-ide.py" "$BIN/mini-ide.py"
 chmod +x "$BIN/mini-ide.py"
+rm -rf "$BIN/mini_ide"
+cp -r "$SRC/mini_ide" "$BIN/mini_ide"
 cp "$SRC/scripts/limit-cpu.sh" "$BIN/limit-cpu.sh"
 chmod +x "$BIN/limit-cpu.sh"
 

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # mini-ide v8: modo multitasking (hasta 3 proyectos en columnas) + modo normal.
-import sys, os, shutil, csv, json, subprocess, tempfile, math
+import sys, os, shutil, csv, json, subprocess, math
 from itertools import islice
+from mini_ide.settings import WARN_LARGE, MAX_LARGE, MAX_PDF_PIXELS
+from mini_ide.file_ops import (atomic_write, validate_child_name, looks_binary,
+                               create_new_file, create_new_dir, path_inside,
+                               copy_dest_safe)
+from mini_ide.document import DocumentState
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -37,46 +42,6 @@ IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "av
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}
 CSV_EXT = {"csv", "tsv"}
 CSV_COLORS = ["#2E5E3E", "#1F4E6E", "#5E5E1F", "#6E3E1F", "#4A2E6E"]
-
-WARN_LARGE = 5 * 1024 * 1024
-MAX_LARGE = 25 * 1024 * 1024
-MAX_PDF_PIXELS = 30_000_000
-
-def atomic_write(path, text):
-    d = os.path.dirname(path) or "."
-    try:
-        mode = os.stat(path).st_mode & 0o777
-    except OSError:
-        mode = 0o644
-    fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), dir=d)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-def validate_child_name(name):
-    name = name.strip()
-    if not name or name in {".", ".."}:
-        return None
-    if os.path.basename(name) != name:
-        return None
-    return name
-
-def looks_binary(path, sample=8192):
-    try:
-        with open(path, "rb") as f:
-            return b"\x00" in f.read(sample)
-    except OSError:
-        return False
 
 VSC_CSS = b"""
 window { background-color: #121314; }
@@ -251,17 +216,12 @@ class ProjectPanel(Gtk.Box):
         self.monitors = {}
         self.open_widgets = {}
         self.ed_paths = {}
-        self.buf_path = {}
         self.players = []
         self.opencode_pid = None
         self._compact_tabbed = False
         self._shutdown = False
         self._reloading = False
-        self.save_ids = {}
-        self.doc_state = {}
-        self.doc_conflict = {}
-        self.doc_deleted = {}
-        self.saved_snap = {}
+        self.docs = {}
         self.tab_labels = {}
         self.audio_state = {}
 
@@ -673,32 +633,31 @@ class ProjectPanel(Gtk.Box):
         if not entry:
             return
         buf = entry[0]
-        if gone:
-            if os.path.exists(path):
-                return
-            self.doc_deleted[buf] = True
-            self.doc_state[buf] = False
-            tid = self.save_ids.pop(buf, None)
-            if tid:
-                GLib.source_remove(tid)
-            self._update_tab_ui(buf)
+        doc = self.docs.get(buf)
+        if doc is None:
             return
+        disk = None
         try:
             st = os.stat(path)
             disk = (st.st_mtime_ns, st.st_size)
         except OSError:
+            pass
+        decision = doc.on_disk_event(disk)
+        if decision == 'own':
             return
-        if self.saved_snap.get(path) == disk:
+        if decision == 'reload':
+            self.reload_buffer(buf, doc.path)
             return
-        if not self.doc_state.get(buf):
-            self.reload_buffer(buf, path)
-        elif not self.doc_conflict.get(buf):
-            self.doc_conflict[buf] = True
-            tid = self.save_ids.pop(buf, None)
-            if tid:
-                GLib.source_remove(tid)
+        if decision == 'conflict':
+            if not doc.conflict:
+                doc.conflict = True
+                doc.cancel_autosave()
+                self._update_tab_ui(buf)
+                self._conflict_dialog(buf, doc.path)
+            return
+        if decision == 'deleted':
+            doc.mark_deleted()
             self._update_tab_ui(buf)
-            self._conflict_dialog(buf, path)
 
     def _conflict_dialog(self, buf, path):
         try:
@@ -728,10 +687,9 @@ class ProjectPanel(Gtk.Box):
             buf.set_text(text)
         finally:
             self._reloading = False
-        self.doc_state[buf] = False
-        self.doc_conflict.pop(buf, None)
-        st = os.stat(path)
-        self.saved_snap[path] = (st.st_mtime_ns, st.st_size)
+        doc = self.docs.get(buf)
+        if doc:
+            doc.mark_saved()
         self._update_tab_ui(buf)
 
     def _do_refresh(self):
@@ -844,12 +802,7 @@ class ProjectPanel(Gtk.Box):
             self.open_file(fpath)
 
     def path_inside_root(self, target):
-        try:
-            root_real = os.path.realpath(self.root)
-            target_real = os.path.realpath(target)
-            return os.path.commonpath([root_real, target_real]) == root_real
-        except (OSError, ValueError):
-            return False
+        return path_inside(self.root, target)
 
     def _name_error_dialog(self, name):
         try:
@@ -893,10 +846,9 @@ class ProjectPanel(Gtk.Box):
                     return
                 try:
                     if kind == "newfile":
-                        with open(p, "x", encoding="utf-8"):
-                            pass
+                        create_new_file(p)
                     else:
-                        os.makedirs(p, exist_ok=False)
+                        create_new_dir(p)
                     self.refresh_tree()
                     self.select_path(p)
                     if kind == "newfile":
@@ -943,8 +895,9 @@ class ProjectPanel(Gtk.Box):
             self.open_widgets[new] = widget
             entry = self.ed_paths.pop(old)
             self.ed_paths[new] = entry
-            self.buf_path[entry[0]] = new
-            self.saved_snap[new] = self.saved_snap.pop(old, None)
+            doc = self.docs.get(entry[0])
+            if doc:
+                doc.path = new
             self._update_tab_ui(entry[0])
         self.refresh_tree()
         self.select_path(new)
@@ -997,12 +950,7 @@ class ProjectPanel(Gtk.Box):
         GLib.idle_add(lambda: self.r_name.set_property("editable", False))
 
     def _copy_dest_safe(self, src, dst):
-        try:
-            src_real = os.path.realpath(src)
-            dst_real = os.path.realpath(dst)
-            return os.path.commonpath([src_real, dst_real]) != src_real
-        except (OSError, ValueError):
-            return False
+        return copy_dest_safe(src, dst)
 
     def _copy_error_dialog(self, name):
         try:
@@ -1217,12 +1165,12 @@ class ProjectPanel(Gtk.Box):
         scroll.add(view)
         scroll.show_all()
         self.ed_paths[fpath] = (buffer, scroll)
-        self.buf_path[buffer] = fpath
         buffer.connect("changed", self.on_buffer_changed)
         self.make_tab(scroll, fpath, scroll)
-        self.doc_state[buffer] = False
-        st = os.stat(fpath)
-        self.saved_snap[fpath] = (st.st_mtime_ns, st.st_size)
+        doc = DocumentState(fpath, buffer, GLib.timeout_add, GLib.source_remove,
+                            self._autosave_buffer)
+        doc.snapshot_from_disk()
+        self.docs[buffer] = doc
         self._update_tab_ui(buffer)
 
     def open_table(self, fpath):
@@ -1452,15 +1400,9 @@ class ProjectPanel(Gtk.Box):
             self.ed_tabs.remove_page(self.ed_tabs.page_num(widget))
         entry = self.ed_paths.pop(fpath, None)
         if entry:
-            buf = entry[0]
-            self.buf_path.pop(buf, None)
-            tid = self.save_ids.pop(buf, None)
-            if tid:
-                GLib.source_remove(tid)
-            self.doc_state.pop(buf, None)
-            self.doc_conflict.pop(buf, None)
-            self.doc_deleted.pop(buf, None)
-        self.saved_snap.pop(fpath, None)
+            doc = self.docs.pop(entry[0], None)
+            if doc:
+                doc.cancel_autosave()
         if widget:
             self.tab_labels.pop(widget, None)
         astate = self.audio_state.pop(widget, None) if widget else None
@@ -1543,41 +1485,28 @@ class ProjectPanel(Gtk.Box):
     def on_buffer_changed(self, buf):
         if self._reloading:
             return
-        path = self.buf_path.get(buf)
-        if not path:
+        doc = self.docs.get(buf)
+        if doc is None:
             return
-        self.doc_state[buf] = True
-        self.doc_conflict.pop(buf, None)
-        if self.doc_deleted.get(buf):
-            self._update_tab_ui(buf)
-            return
-        old = self.save_ids.pop(buf, None)
-        if old:
-            GLib.source_remove(old)
-        self.save_ids[buf] = GLib.timeout_add(800, self._autosave_buffer, buf)
+        doc.mark_edited()
         self._update_tab_ui(buf)
 
     def _autosave_buffer(self, buf):
-        self.save_ids.pop(buf, None)
         self.save_buffer(buf)
-        return False
 
     def save_buffer(self, buf):
-        path = self.buf_path.get(buf)
-        if not path or self.doc_deleted.get(buf):
+        doc = self.docs.get(buf)
+        if doc is None or doc.deleted:
             return False
         text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         try:
-            atomic_write(path, text)
+            atomic_write(doc.path, text)
         except OSError as ex:
             print("Could not save:", ex)
-            self.doc_state[buf] = True
+            doc.dirty = True
             self._update_tab_ui(buf)
             return False
-        st = os.stat(path)
-        self.saved_snap[path] = (st.st_mtime_ns, st.st_size)
-        self.doc_state[buf] = False
-        self.doc_conflict.pop(buf, None)
+        doc.mark_saved()
         self._update_tab_ui(buf)
         return True
 
@@ -1592,23 +1521,23 @@ class ProjectPanel(Gtk.Box):
                 break
 
     def _update_tab_ui(self, buf):
-        path = self.buf_path.get(buf)
-        if not path:
+        doc = self.docs.get(buf)
+        if doc is None:
             return
-        entry = self.ed_paths.get(path)
+        entry = self.ed_paths.get(doc.path)
         if not entry:
             return
         lbl = self.tab_labels.get(entry[1])
         if not lbl:
             return
-        name = os.path.basename(path)
-        if self.doc_deleted.get(buf):
+        name = os.path.basename(doc.path)
+        if doc.deleted:
             lbl.set_text(name + " ⚠")
             lbl.set_tooltip_text("Deleted externally")
-        elif self.doc_conflict.get(buf):
+        elif doc.conflict:
             lbl.set_text(name + " ⚠")
             lbl.set_tooltip_text("Changed externally while you have unsaved edits")
-        elif self.doc_state.get(buf):
+        elif doc.dirty:
             lbl.set_text(name + " ●")
             lbl.set_tooltip_text("Modified — autosave pending")
         else:
@@ -1640,12 +1569,8 @@ class ProjectPanel(Gtk.Box):
         if self._shutdown:
             return
         self._shutdown = True
-        for buf, tid in list(self.save_ids.items()):
-            try:
-                GLib.source_remove(tid)
-            except Exception:
-                pass
-        self.save_ids.clear()
+        for doc in self.docs.values():
+            doc.cancel_autosave()
         for mon in self.monitors.values():
             try:
                 mon.cancel()

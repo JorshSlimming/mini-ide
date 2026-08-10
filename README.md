@@ -64,6 +64,16 @@ Multiple instances can be opened (each folder in its own window).
 - opencode binary — resolved from: `MINI_IDE_OPENCODE` env var → `PATH` → `~/.opencode/bin/opencode`
 - Material Icon Theme 5.37.0 extension in VS Code (`pkief.material-icon-theme`) for icons (optional, has fallback)
 
+## Tests
+
+Core file/document logic lives in the `mini_ide/` package and is covered by a unit test suite (no display needed):
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Covers: atomic writes, safe create/rename path validation, project-root containment, recursive-copy protection, binary detection, per-buffer autosave timers and external-change conflict classification.
+
 ## Power profiles (optional)
 
 `scripts/limit-cpu.sh` cycles CPU power profiles (max/medium/min) to control
