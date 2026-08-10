@@ -509,21 +509,12 @@ class ProjectPanel(Gtk.Box):
             self.opencode_pid = None
 
     def on_term_selection(self, term):
-        if not term.has_selection():
-            return
         try:
-            res = term.get_text(None, None, True)
-            txt = res[0] if isinstance(res, tuple) else res
-        except Exception:
-            try:
-                txt = term.get_text()
-            except Exception:
+            if not term.get_has_selection():
                 return
-        if txt:
-            try:
-                Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(txt, -1)
-            except Exception:
-                pass
+            term.copy_clipboard()
+        except Exception:
+            pass
 
     def add_command_tab(self, btn=None):
         term = self.make_terminal()
