@@ -35,7 +35,7 @@ Multiple instances can be opened (each folder in its own window).
 - Editor with tabs, autosave (0.8 s), `Ctrl+S` to save
 - Command terminals with T1/T2 tabs (`Ctrl+T` or `+` button), collapsible with the ▾ arrow; selecting text = automatic copy (VS Code style)
 - **opencode** terminal embedded in the project; right-click menu with Copy/Paste and the Shift hint for selection
-- **Multitasking**: choose 2 or 3 projects in one window, each with its own opencode; with 2+ open files the opencode terminal becomes an extra tab to save space
+- **Multitasking**: add any number of projects in one window (each with its own opencode) via the `+ Add project` button, close any of them with its ✕, or exit back to one project; with 2+ open files the opencode terminal becomes an extra tab to save space
 - Toolbar: copy folder path, open folder in file manager, `+ File` / `+ Folder` creation
 - Drop zone above the tree (multitasking): drop files to copy them to the project root
 - Opening without a folder: opens the **last project** used; if none, shows the project selector directly

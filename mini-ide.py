@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# mini-ide v8: modo multitasking (hasta 3 proyectos en columnas) + modo normal.
+# mini-ide v9: modo multitasking dinámico (agrega/cierra proyectos libremente).
 import sys, os, shutil, csv, json, subprocess, math
 from itertools import islice
 from mini_ide.settings import WARN_LARGE, MAX_LARGE, MAX_PDF_PIXELS
@@ -36,7 +36,6 @@ OPENCODE = (os.environ.get("MINI_IDE_OPENCODE")
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
-MAX_PROJECTS = 3
 
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "avif"}
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}
@@ -478,7 +477,7 @@ class ProjectPanel(Gtk.Box):
 
     def on_term_key(self, term, ev):
         if (ev.state & Gdk.ModifierType.CONTROL_MASK
-                and Gdk.keyval_name(ev.keyval) == 'v'):
+                and Gdk.keyval_name(ev.keyval).lower() == 'v'):
             self.term_paste(term)
             return True
         return False
@@ -1927,14 +1926,21 @@ class MiniIDE(Gtk.Window):
 
         btn_openfolder = Gtk.Button(label="Open folder")
         btn_openfolder.connect("clicked", self.open_folder_new_instance)
-        self.max_projects = MAX_PROJECTS
-        self.btn_multitask = Gtk.Button(label="Multitarea")
-        self.btn_multitask.set_tooltip_text("Choose number of projects")
+        self.btn_add = Gtk.Button(label="+ Add project")
+        self.btn_add.set_tooltip_text("Add a project to the multitask view")
+        self.btn_add.connect("clicked", self.on_add_click)
+        self.btn_add.set_no_show_all(True)
+        self.btn_add.hide()
+        self.btn_multitask = Gtk.Button(label="Multitask")
+        self.btn_multitask.set_tooltip_text("Toggle multitask view")
         self.btn_multitask.connect("clicked", self.on_multitask_click)
+        self.btn_multitask.set_no_show_all(True)
+        self.btn_multitask.set_visible(True)
         self.hb = Gtk.HeaderBar()
         self.hb.set_show_close_button(True)
         self.hb.set_title(os.path.basename(self.root))
         self.hb.pack_start(btn_openfolder)
+        self.hb.pack_start(self.btn_add)
         self.hb.pack_start(self.btn_multitask)
         self.set_titlebar(self.hb)
 
@@ -1955,42 +1961,43 @@ class MiniIDE(Gtk.Window):
 
     # ---------------- multitasking ----------------
     def on_multitask_click(self, btn):
-        if self.mode != "normal":
+        if self.mode == "normal":
+            self.enter_multitask()
+        else:
             self.exit_multitask()
-            return
+
+    def on_add_click(self, btn):
         menu = Gtk.Menu()
-        for n in (2, 3):
-            item = Gtk.MenuItem(label="%d projects" % n)
-            item.connect("activate", lambda w, n=n: self.enter_multitask(n))
-            menu.append(item)
+        if self.recents:
+            for folder in self.recents[:6]:
+                item = Gtk.MenuItem(label=os.path.basename(folder))
+                item.connect("activate", lambda w, f=folder: self.open_project(f))
+                menu.append(item)
+            menu.append(Gtk.SeparatorMenuItem())
+        item = Gtk.MenuItem(label="Choose folder…")
+        item.connect("activate", self.browse_project)
+        menu.append(item)
         menu.show_all()
         menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
 
-    def enter_multitask(self, n=None):
+    def enter_multitask(self):
         self.mode = "multitask"
-        if n is not None:
-            self.max_projects = n
-        if len(self.panels) > self.max_projects:
-            extra = self.panels[self.max_projects:]
-            for p in extra:
-                if not p.request_close():
-                    return
-            for p in extra:
-                p.shutdown()
-            self.panels = self.panels[:self.max_projects]
+        self.main_panel.on_close = self.close_panel
         self.main_panel.set_layout("compact")
-        self.btn_multitask.set_label("Exit multitasking")
-        self.set_title("Multitasking — %d project" % len(self.panels))
+        self.btn_multitask.set_label("Exit multitask")
+        self.btn_add.set_visible(True)
         self.rebuild_layout()
 
     def exit_multitask(self):
+        if not self.panels or self.main_panel is None:
+            return
         extra = self.panels[1:]
         if extra:
             names = ", ".join(os.path.basename(p.root) for p in extra)
             dlg = Gtk.MessageDialog(transient_for=self, modal=True,
                                     message_type=Gtk.MessageType.QUESTION,
                                     buttons=Gtk.ButtonsType.YES_NO,
-                                    text="Exit multitasking",
+                                    text="Exit multitask",
                                     secondary_text="Will close: %s (and their opencode). Continue?" % names)
             resp = dlg.run()
             dlg.destroy()
@@ -2004,8 +2011,10 @@ class MiniIDE(Gtk.Window):
             self.panels = [self.main_panel]
         self.mode = "normal"
         self.main_panel.set_layout("full")
-        self.btn_multitask.set_label("Multitasking")
-        self.set_title(os.path.basename(self.root))
+        self.main_panel.on_close = None
+        self.btn_multitask.set_label("Multitask")
+        self.btn_add.set_visible(False)
+        self.set_title(os.path.basename(self.main_panel.root))
         for ch in list(self.content.get_children()):
             self.content.remove(ch)
         parent = self.main_panel.get_parent()
@@ -2018,7 +2027,7 @@ class MiniIDE(Gtk.Window):
     def make_empty_slot(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         lbl = Gtk.Label(xalign=0)
-        lbl.set_markup("<b>New project</b>")
+        lbl.set_markup("<b>Add a project</b>")
         box.pack_start(lbl, False, False, 8)
         if self.recents:
             lbl2 = Gtk.Label("Recent:", xalign=0)
@@ -2037,14 +2046,19 @@ class MiniIDE(Gtk.Window):
         return box
 
     def open_project(self, folder):
-        if folder not in [p.root for p in self.panels] and len(self.panels) < self.max_projects:
-            panel = ProjectPanel(folder, "compact", on_close=self.close_panel)
-            self.panels.append(panel)
-            save_recents(folder)
-            self.rebuild_layout()
+        if self.mode != "multitask":
+            self.enter_multitask()
+        if folder in [p.root for p in self.panels]:
+            return
+        panel = ProjectPanel(folder, "compact", on_close=self.close_panel)
+        self.panels.append(panel)
+        if self.main_panel is None:
+            self.main_panel = panel
+        save_recents(folder)
+        self.rebuild_layout()
 
     def browse_project(self, btn=None):
-        dlg = Gtk.FileChooserDialog(title="Open project in multitasking", transient_for=self,
+        dlg = Gtk.FileChooserDialog(title="Open project in multitask", transient_for=self,
                                     action=Gtk.FileChooserAction.SELECT_FOLDER)
         dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                         Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
@@ -2053,7 +2067,7 @@ class MiniIDE(Gtk.Window):
         dlg.destroy()
 
     def close_panel(self, panel):
-        if panel is self.main_panel:
+        if panel not in self.panels:
             return
         dlg = Gtk.MessageDialog(transient_for=self, modal=True,
                                 message_type=Gtk.MessageType.WARNING,
@@ -2068,10 +2082,9 @@ class MiniIDE(Gtk.Window):
             return
         panel.shutdown()
         self.panels.remove(panel)
-        if len(self.panels) == 1:
-            self.exit_multitask()
-        else:
-            self.rebuild_layout()
+        if self.main_panel is panel:
+            self.main_panel = self.panels[0] if self.panels else None
+        self.rebuild_layout()
 
     def rebuild_layout(self):
         for ch in list(self.content.get_children()):
@@ -2080,43 +2093,40 @@ class MiniIDE(Gtk.Window):
             parent = p.get_parent()
             if parent is not None:
                 parent.remove(p)
-        widgets = []
-        maxn = self.max_projects
-        for i in range(maxn):
-            if i < len(self.panels):
-                widgets.append(self.panels[i])
-            else:
-                widgets.append(self.make_empty_slot())
-        container = None
-        if maxn == 2:
-            container = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
-            container.pack1(widgets[0], True, False)
-            container.pack2(widgets[1], True, False)
-        else:
-            p23 = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
-            p23.pack1(widgets[1], True, False)
-            p23.pack2(widgets[2], True, False)
-            container = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
-            container.pack1(widgets[0], True, False)
-            container.pack2(p23, True, False)
-            self._p23 = p23
+        self.btn_multitask.set_visible(bool(self.panels))
+        if not self.panels:
+            self.set_title("Mini-IDE — add a project")
+            box = self.make_empty_slot()
+            self.content.pack_start(box, True, True, 0)
+            self.content.show_all()
+            return
+        self._mt_panes = []
+        container = self._build_panes(list(self.panels))
         self._mt_container = container
         self.content.pack_start(container, True, True, 0)
         self.content.show_all()
         for p in self.panels:
             p._apply_editor_visibility()
-        self.set_title("Multitasking — %d project%s" % (len(self.panels), "s" if len(self.panels) > 1 else ""))
+        self.set_title("Multitask — %d project%s" % (len(self.panels),
+                                                     "s" if len(self.panels) > 1 else ""))
         GLib.idle_add(self._mt_sizes)
+
+    def _build_panes(self, widgets):
+        if len(widgets) == 1:
+            return widgets[0]
+        mid = len(widgets) // 2
+        pane = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        self._mt_panes.append((pane, mid, len(widgets)))
+        pane.pack1(self._build_panes(widgets[:mid]), True, False)
+        pane.pack2(self._build_panes(widgets[mid:]), True, False)
+        return pane
 
     def _mt_sizes(self):
         try:
-            w = self._mt_container.get_allocated_width()
-            n = self.max_projects
-            if w > 50:
-                self._mt_container.set_position(w // n)
-                if n == 3:
-                    rest = w - w // n
-                    self._p23.set_position(rest // 2)
+            for pane, left, total in self._mt_panes:
+                w = pane.get_allocated_width()
+                if w > 50:
+                    pane.set_position(int(w * left / total))
         except Exception:
             pass
         return False
@@ -2137,10 +2147,30 @@ class MiniIDE(Gtk.Window):
                              stderr=subprocess.DEVNULL)
         dlg.destroy()
 
+    def _panel_for(self, widget):
+        p = widget
+        while p is not None:
+            if isinstance(p, ProjectPanel):
+                return p
+            p = p.get_parent()
+        return None
+
     def on_win_key(self, w, ev):
-        if self.mode == "multitask" and ev.state & Gdk.ModifierType.CONTROL_MASK:
+        if ev.state & Gdk.ModifierType.CONTROL_MASK:
             k = Gdk.keyval_name(ev.keyval)
-            if k in ("1", "2", "3"):
+            if k.lower() == 'v':
+                focused = self.get_focus()
+                if focused is None or isinstance(focused, (Vte.Terminal,
+                                                           GtkSource.View,
+                                                           Gtk.TextView,
+                                                           Gtk.Entry)):
+                    return False
+                panel = self._panel_for(focused) or self.main_panel
+                if panel is not None:
+                    panel.term_paste(panel.opencode_term)
+                    return True
+                return False
+            if self.mode == "multitask" and k in tuple("123456789"):
                 idx = int(k) - 1
                 if idx < len(self.panels):
                     self.panels[idx].tree.grab_focus()
