@@ -45,7 +45,8 @@ Multiple instances can be opened (each folder in its own window).
 - Drag files and folders inside the tree → moves them to the hovered folder (with root containment and recursive-move protection)
 - The `Files` button hides the file tree without losing its width; the terminal arrow hides the command terminal without losing its height
 - Material Icon Theme icons with the exact mappings from the VS Code extension
-- VS Code Dark 2026 palette (matching your VS Code theme)
+- OpenCode Terminal palette: charcoal surfaces, light terminal text, blue focus and orange accents
+- Mini-IDE terminal logo in scalable SVG format for crisp desktop and menu icons
 
 ## Shortcuts
 

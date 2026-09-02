@@ -37,6 +37,9 @@ ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
 SESSION_FILE = os.environ.get("MINI_IDE_SESSION") or os.path.expanduser("~/.config/mini-ide/session.json")
+APP_ICON = (os.path.join(os.path.dirname(SCRIPT), "icons", "mini-ide.svg")
+            if os.path.isdir(os.path.join(os.path.dirname(SCRIPT), "icons"))
+            else os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/mini-ide.svg"))
 
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "avif"}
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}
@@ -44,8 +47,8 @@ CSV_EXT = {"csv", "tsv"}
 CSV_COLORS = ["#2E5E3E", "#1F4E6E", "#5E5E1F", "#6E3E1F", "#4A2E6E"]
 
 VSC_CSS = b"""
-window { background-color: #121314; }
-box, paned, scrolledwindow, notebook { background-color: #121314; }
+window { background-color: #0B0B0C; }
+box, paned, scrolledwindow, notebook { background-color: #0B0B0C; }
 box.titlebar { background-color: transparent; background-image: none; }
 headerbar box { background-color: transparent; background-image: none; }
 box.titlebar button {
@@ -61,13 +64,13 @@ box.titlebar button {
 box.titlebar button:hover { background-color: rgba(255,255,255,0.12); }
 box.titlebar button:active { background-color: rgba(100,150,255,0.18); }
 box.titlebar label.title, box.titlebar label.subtitle { background-color: transparent; background-image: none; color: #BFBFBF; }
-headerbar { background-color: #191A1B; background-image: none; min-height: 0px; padding: 2px 4px; }
-headerbar:backdrop { background-color: #191A1B; background-image: none; }
+headerbar { background-color: #171719; background-image: none; min-height: 0px; padding: 2px 4px; }
+headerbar:backdrop { background-color: #171719; background-image: none; }
 headerbar button {
-    background-color: #242526;
+    background-color: #242428;
     background-image: none;
     color: #D4D4D4;
-    border: 1px solid #2A2B2C;
+    border: 1px solid #37373C;
     border-radius: 4px;
     min-height: 26px;
     min-width: 24px;
@@ -75,31 +78,31 @@ headerbar button {
 }
 headerbar button:hover { background-color: rgba(255,255,255,0.12); border-color: #3A3B3C; }
 headerbar button:active { background-color: rgba(100,150,255,0.18); border-color: #3994BC; }
-headerbar button:backdrop { background-color: #191A1B; color: #8C8C8C; }
+headerbar button:backdrop { background-color: #171719; color: #8C8C8C; }
 headerbar label, headerbar .title, headerbar .subtitle, headerbar button label { color: #BFBFBF; font-size: 13px; text-shadow: none; }
 headerbar .title { background-color: transparent; background-image: none; color: #EDEDED; font-weight: 600; }
 headerbar button.titlebutton, headerbar button.titlebutton label { color: #D4D4D4; }
 headerbar button.titlebutton { background-color: transparent; background-image: none; border: none; border-radius: 4px; margin: 1px; min-width: 30px; min-height: 24px; }
 headerbar button.titlebutton:hover { background-color: rgba(255,255,255,0.12); }
-headerbar button.session-toggle:checked { background-color: #094771; border-color: #3994BC; color: #EDEDED; }
-headerbar button.session-toggle:checked:hover { background-color: #0B5A8C; }
-treeview { background-color: #191A1B; color: #BFBFBF; }
+headerbar button.session-toggle:checked { background-color: #24557D; border-color: #5B9CF0; color: #F2F2F2; }
+headerbar button.session-toggle:checked:hover { background-color: #2D6998; }
+treeview { background-color: #151517; color: #C9C9CB; }
 treeview:hover { background-color: rgba(255,255,255,0.06); }
-treeview:selected { background-color: #094771; color: #EDEDED; }
-treeview:selected:backdrop { background-color: #2C2D2E; color: #BFBFBF; }
-treeview.view { border-color: #191A1B; }
-box.tree-toolbar { background-color: #191A1B; border-bottom: 1px solid #2A2B2C; padding: 3px 4px 5px 4px; }
+treeview:selected { background-color: #24557D; color: #F2F2F2; }
+treeview:selected:backdrop { background-color: #303035; color: #C9C9CB; }
+treeview.view { border-color: #151517; }
+box.tree-toolbar { background-color: #151517; border-bottom: 1px solid #37373C; padding: 3px 4px 5px 4px; }
 box.tree-path { padding: 1px 0px 2px 0px; }
 box.tree-actions { padding-top: 2px; }
-box.project-bar { background-color: #191A1B; border-bottom: 1px solid #2A2B2C; padding: 2px 4px; }
+box.project-bar { background-color: #151517; border-bottom: 1px solid #37373C; padding: 2px 4px; }
 box.project-bar label.project-name { color: #EDEDED; font-size: 13px; }
 box.terminal-actions button { min-width: 25px; min-height: 26px; padding: 2px 6px; }
-button.panel-toggle { background-color: #242526; border-color: #333536; }
+button.panel-toggle { background-color: #242428; border-color: #37373C; }
 button.panel-toggle:hover { background-color: #303234; border-color: #3994BC; }
 paned > separator { background-color: #454748; min-width: 2px; min-height: 2px; }
 button {
     color: #BFBFBF;
-    background-color: #191A1B;
+    background-color: #171719;
     background-image: none;
     border: 1px solid #2A2B2C;
     border-radius: 4px;
@@ -108,14 +111,14 @@ button {
 }
 button:hover { background-color: rgba(255,255,255,0.08); border-color: #3A3B3C; }
 button:active { background-color: rgba(100,150,255,0.15); }
-entry { background-color: #191A1B; color: #BFBFBF; border-color: #333536; }
-scale trough { background-color: #2A2B2C; }
+entry { background-color: #171719; color: #D0D0D2; border-color: #3A3A40; }
+scale trough { background-color: #303035; }
 .dim-label { color: #8C8C8C; }
 label { color: #BFBFBF; }
-notebook { background-color: #191A1B; }
-notebook header { background-color: #191A1B; background-image: none; border-color: #2A2B2C; border-bottom: 1px solid #2A2B2C; min-height: 34px; }
+notebook { background-color: #151517; }
+notebook header { background-color: #151517; background-image: none; border-color: #37373C; border-bottom: 1px solid #37373C; min-height: 34px; }
 notebook tab {
-    background-color: #191A1B;
+    background-color: #151517;
     min-height: 34px;
     padding: 4px 12px;
     border-radius: 4px 4px 0 0;
@@ -123,7 +126,7 @@ notebook tab {
 }
 notebook tab label { color: #8C8C8C; }
 notebook tab:active, notebook tab:checked {
-    background-color: #121314;
+    background-color: #0B0B0C;
     border-bottom: 3px solid #3994BC;
 }
 notebook tab:active label, notebook tab:checked label { color: #EDEDED; }
@@ -131,8 +134,8 @@ notebook tab button { min-width: 20px; min-height: 20px; padding: 0px; border-ra
 notebook tab button:hover { background-color: rgba(255,255,255,0.15); }
 .icon-btn { min-width: 28px; min-height: 28px; padding: 4px; }
 label, button, headerbar, notebook, treeview { text-shadow: none; -gtk-icon-shadow: none; }
-.root-drop { border: 2px dashed #3994BC; background-color: #191A1B; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
-.root-drop:hover { background-color: rgba(57,148,188,0.2); }
+.root-drop { border: 2px dashed #5B9CF0; background-color: #151517; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
+.root-drop:hover { background-color: rgba(91,156,240,0.2); }
 """
 
 THEME_JSON = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/dist/material-icons.json")
@@ -2109,6 +2112,11 @@ def save_session(window):
 class MiniIDE(Gtk.Window):
     def __init__(self, root):
         super().__init__()
+        if os.path.isfile(APP_ICON):
+            try:
+                self.set_icon_from_file(APP_ICON)
+            except Exception:
+                pass
         self.set_title(os.path.basename(root))
         self.set_default_size(1360, 820)
         self.root = os.path.abspath(root)

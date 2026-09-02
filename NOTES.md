@@ -26,7 +26,8 @@ run opencode**. Usage: ~83 MB.
 - `Files` and terminal collapse controls preserve each panel's last size when restored
 - Icons: Material Icon Theme (Philipp Kief), exact mappings read from
   `dist/material-icons.json` of the extension installed in VS Code
-- Visual palette: VS Code Dark Modern (tree #252526, header #3C3C3C, selection #094771)
+- Visual palette: OpenCode Terminal-inspired charcoal, light text, blue focus and orange accents
+- Logo: scalable terminal prompt icon in `icons/mini-ide.svg`
 
 ## Planned improvements
 1. **LSP in Mini-IDE** — autocomplete and live diagnostics in the editor
