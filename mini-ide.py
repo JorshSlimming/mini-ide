@@ -412,7 +412,7 @@ class ProjectPanel(Gtk.Box):
             bar.get_style_context().add_class("project-bar")
             self.btn_tree = Gtk.Button(label="Files")
             self.btn_tree.get_style_context().add_class("panel-toggle")
-            self.btn_tree.set_tooltip_text("Hide or show the file tree")
+            self.btn_tree.set_tooltip_text("Hide the file tree")
             self.btn_tree.connect("clicked", self.toggle_tree)
             bar.pack_start(self.btn_tree, False, False, 2)
             lbl = Gtk.Label(xalign=0)
@@ -1700,7 +1700,7 @@ class ProjectPanel(Gtk.Box):
                 self.tree_box.hide()
                 GLib.idle_add(lambda: self._collapse_tree(pane))
                 if hasattr(self, "btn_tree"):
-                    self.btn_tree.set_label("Files +")
+                    self.btn_tree.set_label("Show files")
                     self.btn_tree.set_tooltip_text("Show the file tree")
             else:
                 self.tree_box.show_all()
@@ -1710,7 +1710,7 @@ class ProjectPanel(Gtk.Box):
                     self.root_drop.hide()
                 GLib.idle_add(lambda: self._restore_tree(pane))
                 if hasattr(self, "btn_tree"):
-                    self.btn_tree.set_label("Files")
+                    self.btn_tree.set_label("Hide files")
                     self.btn_tree.set_tooltip_text("Hide the file tree")
         except Exception:
             pass
@@ -2148,8 +2148,8 @@ class MiniIDE(Gtk.Window):
         self.btn_session.set_tooltip_text("Restore open projects and files when Mini-IDE starts")
         self.btn_session.get_style_context().add_class("session-toggle")
         self.btn_session.connect("toggled", self.on_session_toggle)
-        self.btn_tree = Gtk.Button(label="Files")
-        self.btn_tree.set_tooltip_text("Hide or show the file tree")
+        self.btn_tree = Gtk.Button(label="Hide files")
+        self.btn_tree.set_tooltip_text("Hide the file tree")
         self.btn_tree.get_style_context().add_class("panel-toggle")
         self.btn_tree.connect("clicked", self.on_global_tree_toggle)
         self.hb = Gtk.HeaderBar()
@@ -2177,6 +2177,17 @@ class MiniIDE(Gtk.Window):
     def on_global_tree_toggle(self, btn):
         if self.main_panel is not None:
             self.main_panel.toggle_tree()
+            self._sync_global_tree_button()
+
+    def _sync_global_tree_button(self):
+        if self.main_panel is None:
+            return
+        if self.main_panel._tree_collapsed:
+            self.btn_tree.set_label("Show files")
+            self.btn_tree.set_tooltip_text("Show the file tree")
+        else:
+            self.btn_tree.set_label("Hide files")
+            self.btn_tree.set_tooltip_text("Hide the file tree")
 
     def restore_session(self):
         if not self._restore_session_enabled or not self.session_enabled:
@@ -2245,6 +2256,7 @@ class MiniIDE(Gtk.Window):
 
     def enter_multitask(self):
         self.mode = "multitask"
+        self.btn_tree.set_visible(False)
         self.main_panel.on_close = self.close_panel
         self.main_panel.set_layout("compact")
         self.btn_multitask.set_label("Exit multitask")
@@ -2277,6 +2289,8 @@ class MiniIDE(Gtk.Window):
         self.main_panel.on_close = None
         self.btn_multitask.set_label("Multitask")
         self.btn_add.set_visible(False)
+        self.btn_tree.set_visible(True)
+        self._sync_global_tree_button()
         self.set_title(os.path.basename(self.main_panel.root))
         for ch in list(self.content.get_children()):
             self.content.remove(ch)
