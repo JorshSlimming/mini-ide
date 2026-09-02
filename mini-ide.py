@@ -69,7 +69,7 @@ headerbar button {
     color: #D4D4D4;
     border: 1px solid #2A2B2C;
     border-radius: 4px;
-    min-height: 22px;
+    min-height: 26px;
     min-width: 24px;
     padding: 3px 9px;
 }
@@ -93,7 +93,7 @@ box.tree-path { padding: 1px 0px 2px 0px; }
 box.tree-actions { padding-top: 2px; }
 box.project-bar { background-color: #191A1B; border-bottom: 1px solid #2A2B2C; padding: 2px 4px; }
 box.project-bar label.project-name { color: #EDEDED; font-size: 13px; }
-box.terminal-actions button { min-width: 25px; padding: 2px 6px; }
+box.terminal-actions button { min-width: 25px; min-height: 26px; padding: 2px 6px; }
 button.panel-toggle { background-color: #242526; border-color: #333536; }
 button.panel-toggle:hover { background-color: #303234; border-color: #3994BC; }
 paned > separator { background-color: #454748; min-width: 2px; min-height: 2px; }
@@ -103,7 +103,7 @@ button {
     background-image: none;
     border: 1px solid #2A2B2C;
     border-radius: 4px;
-    min-height: 22px;
+    min-height: 26px;
     padding: 2px 8px;
 }
 button:hover { background-color: rgba(255,255,255,0.08); border-color: #3A3B3C; }
@@ -238,6 +238,7 @@ class ProjectPanel(Gtk.Box):
         self._tabs_collapsed = False
         self._tree_positions = {"full": None, "compact": None}
         self._tabs_positions = {"full": None, "compact": None}
+        self._compact_needs_size = True
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -315,6 +316,8 @@ class ProjectPanel(Gtk.Box):
         btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
 
         self.path_lbl = Gtk.Label(xalign=0)
+        self.path_lbl.set_width_chars(12)
+        self.path_lbl.set_max_width_chars(18)
         self.path_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         self.path_lbl.set_tooltip_text(self.root)
         self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>"
@@ -360,7 +363,6 @@ class ProjectPanel(Gtk.Box):
                                      [Gtk.TargetEntry.new("text/uri-list", 0, 80)],
                                      Gdk.DragAction.COPY)
         self.root_drop.connect("drag-data-received", self.on_root_drop)
-        self.root_drop.set_no_show_all(True)
         self.root_drop.set_visible(False)
 
         self.tree_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -376,6 +378,7 @@ class ProjectPanel(Gtk.Box):
     # ---------------- layout ----------------
     def set_layout(self, layout):
         self.layout = layout
+        self._compact_needs_size = layout == "compact"
         self._compact_tabbed = False
         for ch in list(self.get_children()):
             self.remove(ch)
@@ -404,6 +407,7 @@ class ProjectPanel(Gtk.Box):
             self.main_v = Gtk.Paned.new(Gtk.Orientation.VERTICAL)
             self.main_v.pack1(self.top_h, True, False)
             self.main_v.pack2(self.bottom_h, True, False)
+            self.main_v.connect("size-allocate", self.on_main_v_alloc)
             bar = Gtk.Box(spacing=4)
             bar.get_style_context().add_class("project-bar")
             self.btn_tree = Gtk.Button(label="Files")
@@ -443,16 +447,25 @@ class ProjectPanel(Gtk.Box):
         GLib.idle_add(self._apply_tree_state)
 
     def _compact_sizes(self):
+        self._apply_compact_sizes()
+        return False
+
+    def on_main_v_alloc(self, paned, alloc):
+        if self.layout == "compact" and self._compact_needs_size:
+            self._apply_compact_sizes()
+
+    def _apply_compact_sizes(self):
         try:
-            w = self.get_allocated_width()
-            h = self.get_allocated_height()
-            if w > 50:
-                self.bottom_h.set_position(w // 2)
+            w = self.bottom_h.get_allocated_width()
+            h = self.main_v.get_allocated_height()
+            if w > 50 and not (self._tree_collapsed or self._tabs_collapsed):
+                self.bottom_h.set_position(int(w * 0.35))
             if h > 50:
                 self.main_v.set_position(int(h * 0.58))
+            if w > 50 and h > 50:
+                self._compact_needs_size = False
         except Exception:
             pass
-        return False
 
     # ---------------- editor/terminal visibility ----------------
     def _apply_editor_visibility(self):
@@ -1654,8 +1667,8 @@ class ProjectPanel(Gtk.Box):
             half = alloc.width // 2
             if abs(paned.get_position() - half) > 30:
                 paned.set_position(half)
-        elif paned.get_position() < alloc.width - 50:
-            paned.set_position(alloc.width)
+        elif paned.get_position() > 0:
+            paned.set_position(0)
 
     # ---------------- barra de herramientas ----------------
     def copy_path(self, btn=None):
@@ -1692,7 +1705,9 @@ class ProjectPanel(Gtk.Box):
             else:
                 self.tree_box.show_all()
                 if self.layout == "compact":
-                    self.root_drop.show()
+                    self.root_drop.show_all()
+                else:
+                    self.root_drop.hide()
                 GLib.idle_add(lambda: self._restore_tree(pane))
                 if hasattr(self, "btn_tree"):
                     self.btn_tree.set_label("Files")
@@ -2361,6 +2376,7 @@ class MiniIDE(Gtk.Window):
         else:
             self.set_title(os.path.basename(self.main_panel.root))
         GLib.idle_add(self._mt_sizes)
+        GLib.timeout_add(250, self._mt_sizes)
 
     def _build_panes(self, widgets):
         if len(widgets) == 1:
@@ -2374,6 +2390,9 @@ class MiniIDE(Gtk.Window):
 
     def _mt_sizes(self):
         try:
+            for panel in self.panels:
+                if panel.layout == "compact":
+                    panel._apply_compact_sizes()
             for pane, left, total in self._mt_panes:
                 w = pane.get_allocated_width()
                 if w > 50:
