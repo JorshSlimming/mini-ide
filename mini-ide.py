@@ -37,9 +37,7 @@ ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
 SESSION_FILE = os.environ.get("MINI_IDE_SESSION") or os.path.expanduser("~/.config/mini-ide/session.json")
-APP_ICON = (os.path.join(os.path.dirname(SCRIPT), "icons", "mini-ide.svg")
-            if os.path.isdir(os.path.join(os.path.dirname(SCRIPT), "icons"))
-            else os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/mini-ide.svg"))
+APP_ICON = os.path.join(os.path.dirname(SCRIPT), "icons", "mini-ide.png")
 
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "avif"}
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}

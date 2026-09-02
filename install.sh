@@ -6,9 +6,8 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 ICONDIR="$HOME/.local/share/icons/hicolor/128x128/apps"
-SCALABLE_ICONDIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 
-mkdir -p "$BIN" "$APPS" "$ICONDIR" "$SCALABLE_ICONDIR"
+mkdir -p "$BIN" "$APPS" "$ICONDIR"
 
 cp "$SRC/mini-ide.py" "$BIN/mini-ide.py"
 chmod +x "$BIN/mini-ide.py"
@@ -24,8 +23,8 @@ EOF
 chmod +x "$BIN/mini-ide"
 
 rm -f "$HOME/.config/autostart/limit-cpu.desktop"
-rm -f "$ICONDIR/mini-ide.png"
-cp "$SRC/icons/mini-ide.svg" "$SCALABLE_ICONDIR/mini-ide.svg"
+rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/mini-ide.svg"
+cp "$SRC/icons/mini-ide.png" "$ICONDIR/mini-ide.png"
 
 cat > "$APPS/mini-ide.desktop" <<EOF
 [Desktop Entry]

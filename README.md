@@ -46,7 +46,7 @@ Multiple instances can be opened (each folder in its own window).
 - The `Files` button hides the file tree without losing its width; the terminal arrow hides the command terminal without losing its height
 - Material Icon Theme icons with the exact mappings from the VS Code extension
 - OpenCode Terminal palette: charcoal surfaces, light terminal text, blue focus and orange accents
-- Mini-IDE terminal logo in scalable SVG format for crisp desktop and menu icons
+- Mini-IDE logo in PNG format for the desktop and application menu
 
 ## Shortcuts
 
