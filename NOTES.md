@@ -18,9 +18,12 @@ run opencode**. Usage: ~83 MB.
 - `+ File` / `+ Folder` → create **in-place** in the tree (Enter confirms, Esc cancels)
 - `Open folder` (header) → opens the folder in a new instance
 - Drag & drop from the system file manager → copies to the destination folder in the tree
+- Dragging an item inside the tree moves it into the hovered folder; external drops still copy
 - Tree with **auto-refresh** (GFileMonitor): files created by opencode/terminal
   appear on their own, also in subfolders
 - Terminals: selecting text = automatic copy to clipboard (VS Code style)
+- Session toggle restores open projects, files, command-terminal count and collapsed panels on the next launch
+- `Files` and terminal collapse controls preserve each panel's last size when restored
 - Icons: Material Icon Theme (Philipp Kief), exact mappings read from
   `dist/material-icons.json` of the extension installed in VS Code
 - Visual palette: VS Code Dark Modern (tree #252526, header #3C3C3C, selection #094771)

@@ -34,6 +34,7 @@ Multiple instances can be opened (each folder in its own window).
 - Double-click opens by type: image, PDF, audio, colored CSV or text (GtkSource with syntax highlighting)
 - Editor with tabs, autosave (0.8 s), `Ctrl+S` to save
 - Command terminals with T1/T2 tabs (`Ctrl+T` or `+` button), collapsible with the ▾ arrow; selecting text = automatic copy (VS Code style)
+- **Session restore**: the `Session: ON/OFF` toggle saves open projects, files, terminal count and panel visibility, restoring them on the next launch
 - **opencode** terminal embedded in the project; right-click menu with Copy/Paste and the Shift hint for selection
 - **Multitasking**: add any number of projects in one window (each with its own opencode) via the `+ Add project` button, close any of them with its ✕, or exit back to one project; with 2+ open files the opencode terminal becomes an extra tab to save space
 - Toolbar: copy folder path, open folder in file manager, `+ File` / `+ Folder` creation
@@ -41,6 +42,8 @@ Multiple instances can be opened (each folder in its own window).
 - Opening without a folder: opens the **last project** used; if none, shows the project selector directly
 - File management: rename (F2), delete (Del), create in-place with Enter/Esc
 - Drag & drop from the system file manager → copies to the destination folder
+- Drag files and folders inside the tree → moves them to the hovered folder (with root containment and recursive-move protection)
+- The `Files` button hides the file tree without losing its width; the terminal arrow hides the command terminal without losing its height
 - Material Icon Theme icons with the exact mappings from the VS Code extension
 - VS Code Dark 2026 palette (matching your VS Code theme)
 

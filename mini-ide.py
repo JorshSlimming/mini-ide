@@ -36,6 +36,7 @@ OPENCODE = (os.environ.get("MINI_IDE_OPENCODE")
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
+SESSION_FILE = os.environ.get("MINI_IDE_SESSION") or os.path.expanduser("~/.config/mini-ide/session.json")
 
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "avif"}
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}
@@ -70,22 +71,32 @@ headerbar button {
     border-radius: 4px;
     min-height: 22px;
     min-width: 24px;
-    padding: 2px 8px;
+    padding: 3px 9px;
 }
 headerbar button:hover { background-color: rgba(255,255,255,0.12); border-color: #3A3B3C; }
 headerbar button:active { background-color: rgba(100,150,255,0.18); border-color: #3994BC; }
 headerbar button:backdrop { background-color: #191A1B; color: #8C8C8C; }
 headerbar label, headerbar .title, headerbar .subtitle, headerbar button label { color: #BFBFBF; font-size: 13px; text-shadow: none; }
-headerbar .title { background-color: transparent; background-image: none; }
+headerbar .title { background-color: transparent; background-image: none; color: #EDEDED; font-weight: 600; }
 headerbar button.titlebutton, headerbar button.titlebutton label { color: #D4D4D4; }
 headerbar button.titlebutton { background-color: transparent; background-image: none; border: none; border-radius: 4px; margin: 1px; min-width: 30px; min-height: 24px; }
 headerbar button.titlebutton:hover { background-color: rgba(255,255,255,0.12); }
+headerbar button.session-toggle:checked { background-color: #094771; border-color: #3994BC; color: #EDEDED; }
+headerbar button.session-toggle:checked:hover { background-color: #0B5A8C; }
 treeview { background-color: #191A1B; color: #BFBFBF; }
 treeview:hover { background-color: rgba(255,255,255,0.06); }
 treeview:selected { background-color: #094771; color: #EDEDED; }
 treeview:selected:backdrop { background-color: #2C2D2E; color: #BFBFBF; }
 treeview.view { border-color: #191A1B; }
-paned > separator { background-color: #3A3B3C; min-width: 2px; min-height: 2px; }
+box.tree-toolbar { background-color: #191A1B; border-bottom: 1px solid #2A2B2C; padding: 3px 4px 5px 4px; }
+box.tree-path { padding: 1px 0px 2px 0px; }
+box.tree-actions { padding-top: 2px; }
+box.project-bar { background-color: #191A1B; border-bottom: 1px solid #2A2B2C; padding: 2px 4px; }
+box.project-bar label.project-name { color: #EDEDED; font-size: 13px; }
+box.terminal-actions button { min-width: 25px; padding: 2px 6px; }
+button.panel-toggle { background-color: #242526; border-color: #333536; }
+button.panel-toggle:hover { background-color: #303234; border-color: #3994BC; }
+paned > separator { background-color: #454748; min-width: 2px; min-height: 2px; }
 button {
     color: #BFBFBF;
     background-color: #191A1B;
@@ -223,6 +234,10 @@ class ProjectPanel(Gtk.Box):
         self.docs = {}
         self.tab_labels = {}
         self.audio_state = {}
+        self._tree_collapsed = False
+        self._tabs_collapsed = False
+        self._tree_positions = {"full": None, "compact": None}
+        self._tabs_positions = {"full": None, "compact": None}
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -245,17 +260,18 @@ class ProjectPanel(Gtk.Box):
         self.tabs.set_scrollable(True)
         self.tabs.set_tab_pos(Gtk.PositionType.TOP)
         self.cmd_terms = []
+        tab_actions = Gtk.Box(spacing=2)
+        tab_actions.get_style_context().add_class("terminal-actions")
         plus_btn = Gtk.Button(label="+")
         plus_btn.set_tooltip_text("New terminal (Ctrl+T)")
         plus_btn.connect("clicked", lambda w: self.add_command_tab())
-        self.tabs.set_action_widget(plus_btn, Gtk.PackType.END)
-        plus_btn.show_all()
+        tab_actions.pack_start(plus_btn, False, False, 0)
         self.btn_collapse = Gtk.Button(label="▾")
         self.btn_collapse.set_tooltip_text("Hide terminal")
         self.btn_collapse.connect("clicked", self.toggle_tabs)
-        self.tabs.set_action_widget(self.btn_collapse, Gtk.PackType.END)
-        self.btn_collapse.show_all()
-        self._tabs_collapsed = False
+        tab_actions.pack_start(self.btn_collapse, False, False, 0)
+        self.tabs.set_action_widget(tab_actions, Gtk.PackType.END)
+        tab_actions.show_all()
         self.add_command_tab()
 
         # tree
@@ -279,9 +295,14 @@ class ProjectPanel(Gtk.Box):
         self.tree.connect("button-press-event", self.on_tree_btn)
         self.tree.connect("row-expanded", self.on_expand)
         self.tree.connect("row-collapsed", self.on_collapse)
+        self.tree.drag_source_set(Gdk.ModifierType.BUTTON1_MASK,
+                                  [Gtk.TargetEntry.new("application/x-mini-ide-path", 0, 81)],
+                                  Gdk.DragAction.MOVE)
+        self.tree.connect("drag-data-get", self.on_drag_data_get)
         self.tree.drag_dest_set(Gtk.DestDefaults.ALL,
-                                [Gtk.TargetEntry.new("text/uri-list", 0, 80)],
-                                Gdk.DragAction.COPY)
+                                [Gtk.TargetEntry.new("application/x-mini-ide-path", 0, 81),
+                                 Gtk.TargetEntry.new("text/uri-list", 0, 80)],
+                                Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
         self.tree.connect("drag-data-received", self.on_drop)
         self.scroll_tree = Gtk.ScrolledWindow()
         self.scroll_tree.add(self.tree)
@@ -294,6 +315,8 @@ class ProjectPanel(Gtk.Box):
         btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
 
         self.path_lbl = Gtk.Label(xalign=0)
+        self.path_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self.path_lbl.set_tooltip_text(self.root)
         self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>"
                                  % GLib.markup_escape_text(self.root))
         btn_copy = Gtk.Button()
@@ -312,13 +335,16 @@ class ProjectPanel(Gtk.Box):
         btn_open.connect("clicked", self.open_in_fm)
 
         self.row_path = Gtk.Box(spacing=4)
+        self.row_path.get_style_context().add_class("tree-path")
         self.row_path.pack_start(self.path_lbl, True, True, 6)
         self.row_path.pack_end(btn_open, False, False, 0)
         self.row_path.pack_end(btn_copy, False, False, 0)
         self.row_new = Gtk.Box(spacing=4)
+        self.row_new.get_style_context().add_class("tree-actions")
         self.row_new.pack_start(btn_newfile, False, False, 0)
         self.row_new.pack_start(btn_newfolder, False, False, 0)
         self.tree_bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.tree_bar.get_style_context().add_class("tree-toolbar")
         self.tree_bar.pack_start(self.row_path, False, False, 0)
         self.tree_bar.pack_start(self.row_new, False, False, 0)
 
@@ -379,7 +405,14 @@ class ProjectPanel(Gtk.Box):
             self.main_v.pack1(self.top_h, True, False)
             self.main_v.pack2(self.bottom_h, True, False)
             bar = Gtk.Box(spacing=4)
+            bar.get_style_context().add_class("project-bar")
+            self.btn_tree = Gtk.Button(label="Files")
+            self.btn_tree.get_style_context().add_class("panel-toggle")
+            self.btn_tree.set_tooltip_text("Hide or show the file tree")
+            self.btn_tree.connect("clicked", self.toggle_tree)
+            bar.pack_start(self.btn_tree, False, False, 2)
             lbl = Gtk.Label(xalign=0)
+            lbl.get_style_context().add_class("project-name")
             lbl.set_markup("<b>%s</b>" % GLib.markup_escape_text(os.path.basename(self.root)))
             bar.pack_start(lbl, True, True, 4)
             if self.on_close:
@@ -407,6 +440,7 @@ class ProjectPanel(Gtk.Box):
             self.root_drop.set_visible(False)
             self.pack_start(self.main_h, True, True, 0)
         GLib.idle_add(self._apply_tabs_state)
+        GLib.idle_add(self._apply_tree_state)
 
     def _compact_sizes(self):
         try:
@@ -973,16 +1007,16 @@ class ProjectPanel(Gtk.Box):
             pass
 
     def on_drop(self, tree, ctx, x, y, data, info, time):
-        dest = self.root
-        info2 = tree.get_path_at_pos(int(x), int(y))
-        if info2:
-            it = self.store.get_iter(info2[0])
-            kind = self.store.get_value(it, 3)
-            p = self.store.get_value(it, 2)
-            if kind == "folder" and p:
-                dest = p
-            elif kind == "file" and p:
-                dest = os.path.dirname(p)
+        if info == 81:
+            src = data.get_text() if data else None
+            dest = self._tree_drop_destination(tree, x, y)
+            if src and dest:
+                self.move_path(src, dest)
+            ctx.finish(True, False, time)
+            return
+        dest = self._tree_drop_destination(tree, x, y)
+        if not dest:
+            dest = self.root
         if data and data.get_uris():
             for uri in data.get_uris():
                 try:
@@ -1008,6 +1042,58 @@ class ProjectPanel(Gtk.Box):
                     print("Copy error:", ex)
             self._do_refresh()
         ctx.finish(True, False, time)
+
+    def on_drag_data_get(self, tree, ctx, data, info, time):
+        if info != 81:
+            return
+        sel = self.tree.get_selection().get_selected()
+        if sel[1]:
+            path = self.store.get_value(sel[1], 2)
+            if path and self.path_inside_root(path):
+                data.set_text(path, -1)
+
+    def _tree_drop_destination(self, tree, x, y):
+        info = tree.get_path_at_pos(int(x), int(y))
+        if not info:
+            return self.root
+        it = self.store.get_iter(info[0])
+        kind = self.store.get_value(it, 3)
+        path = self.store.get_value(it, 2)
+        if kind == "folder" and path:
+            return path
+        if kind == "file" and path:
+            return os.path.dirname(path)
+        return self.root
+
+    def move_path(self, src, dest):
+        src = os.path.abspath(src)
+        dest = os.path.abspath(dest)
+        if not path_inside(self.root, src) or not path_inside(self.root, dest):
+            self._copy_error_dialog(os.path.basename(src),
+                                    "the source or destination is outside the project root.")
+            return
+        if not os.path.exists(src) or not os.path.isdir(dest):
+            return
+        target = os.path.join(dest, os.path.basename(src))
+        if os.path.realpath(src) == os.path.realpath(target):
+            return
+        if os.path.exists(target):
+            self._copy_error_dialog(os.path.basename(src), "a file with that name already exists.")
+            return
+        if os.path.isdir(src) and not self._copy_dest_safe(src, target):
+            self._copy_error_dialog(os.path.basename(src))
+            return
+        try:
+            os.rename(src, target)
+        except OSError as ex:
+            print("Move error:", ex)
+            return
+        for doc, new_path in doc_relocator(self.docs.values(), src, target).items():
+            self._migrate_doc_path(doc, new_path)
+            self._update_tab_ui(doc.buffer)
+        self.watch_path(dest)
+        self.refresh_tree()
+        self.select_path(target)
 
     def on_root_drop(self, w, ctx, x, y, data, info, time):
         if data and data.get_uris():
@@ -1585,8 +1671,60 @@ class ProjectPanel(Gtk.Box):
         except Exception:
             pass
 
+    def toggle_tree(self, btn=None):
+        pane = self.bottom_h if self.layout == "compact" else self.main_h
+        if not self._tree_collapsed:
+            position = pane.get_position()
+            if position > 0:
+                self._tree_positions[self.layout] = position
+        self._tree_collapsed = not self._tree_collapsed
+        self._apply_tree_state()
+
+    def _apply_tree_state(self):
+        try:
+            pane = self.bottom_h if self.layout == "compact" else self.main_h
+            if self._tree_collapsed:
+                self.tree_box.hide()
+                GLib.idle_add(lambda: self._collapse_tree(pane))
+                if hasattr(self, "btn_tree"):
+                    self.btn_tree.set_label("Files +")
+                    self.btn_tree.set_tooltip_text("Show the file tree")
+            else:
+                self.tree_box.show_all()
+                if self.layout == "compact":
+                    self.root_drop.show()
+                GLib.idle_add(lambda: self._restore_tree(pane))
+                if hasattr(self, "btn_tree"):
+                    self.btn_tree.set_label("Files")
+                    self.btn_tree.set_tooltip_text("Hide the file tree")
+        except Exception:
+            pass
+        return False
+
+    def _collapse_tree(self, pane):
+        try:
+            pane.set_position(0)
+        except Exception:
+            pass
+        return False
+
+    def _restore_tree(self, pane):
+        try:
+            position = self._tree_positions.get(self.layout)
+            if position is None:
+                position = 280 if self.layout == "full" else pane.get_allocated_width() // 2
+            pane.set_position(position)
+        except Exception:
+            pass
+        return False
+
     def toggle_tabs(self, btn=None):
+        pane = self.bottom_h if self.layout == "compact" else self.right_v
         self._tabs_collapsed = not self._tabs_collapsed
+        if self._tabs_collapsed:
+            position = pane.get_position()
+            if position > 0:
+                self._tabs_positions[self.layout] = position
         self._apply_tabs_state()
 
     def _apply_tabs_state(self):
@@ -1601,9 +1739,10 @@ class ProjectPanel(Gtk.Box):
 
     def _collapse_tabs(self):
         try:
+            self.tabs.show_all()
             if self.layout == "compact":
-                h = self.bottom_h.get_allocated_height()
-                self.bottom_h.set_position(max(0, h - 30))
+                w = self.bottom_h.get_allocated_width()
+                self.bottom_h.set_position(max(0, w - 30))
             else:
                 h = self.right_v.get_allocated_height()
                 self.right_v.set_position(max(0, h - 30))
@@ -1613,10 +1752,17 @@ class ProjectPanel(Gtk.Box):
 
     def _restore_tabs(self):
         try:
+            self.tabs.show_all()
             if self.layout == "compact":
-                self.bottom_h.set_position(self.bottom_h.get_allocated_height() // 2)
+                position = self._tabs_positions.get(self.layout)
+                if position is None:
+                    position = self.bottom_h.get_allocated_width() // 2
+                self.bottom_h.set_position(position)
             else:
-                self.right_v.set_position(520)
+                position = self._tabs_positions.get(self.layout)
+                if position is None:
+                    position = 520
+                self.right_v.set_position(position)
         except Exception:
             pass
         return False
@@ -1903,6 +2049,48 @@ def save_recents(folder):
         pass
 
 
+def load_session():
+    try:
+        with open(SESSION_FILE) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"enabled": True, "mode": "normal", "projects": []}
+        projects = []
+        for item in data.get("projects", []):
+            if not isinstance(item, dict):
+                continue
+            root = os.path.abspath(item.get("root", ""))
+            if not os.path.isdir(root):
+                continue
+            files = [os.path.abspath(p) for p in item.get("files", [])
+                     if isinstance(p, str) and os.path.isfile(p)]
+            projects.append({"root": root, "files": files,
+                             "terminals": max(1, int(item.get("terminals", 1))),
+                             "tree_hidden": bool(item.get("tree_hidden", False)),
+                             "terminals_hidden": bool(item.get("terminals_hidden", False))})
+        mode = "multitask" if data.get("mode") == "multitask" else "normal"
+        return {"enabled": bool(data.get("enabled", True)), "mode": mode,
+                "projects": projects}
+    except (OSError, TypeError, ValueError):
+        return {"enabled": True, "mode": "normal", "projects": []}
+
+
+def save_session(window):
+    projects = []
+    for panel in window.panels:
+        files = [p for p in panel.ed_paths if os.path.isfile(p)]
+        projects.append({"root": panel.root, "files": files,
+                         "terminals": max(1, len(panel.cmd_terms)),
+                         "tree_hidden": panel._tree_collapsed,
+                         "terminals_hidden": panel._tabs_collapsed})
+    data = {"enabled": window.session_enabled, "mode": window.mode, "projects": projects}
+    try:
+        os.makedirs(os.path.dirname(SESSION_FILE) or ".", exist_ok=True)
+        atomic_write(SESSION_FILE, json.dumps(data, indent=1))
+    except OSError as ex:
+        print("Could not save session:", ex)
+
+
 class MiniIDE(Gtk.Window):
     def __init__(self, root):
         super().__init__()
@@ -1910,6 +2098,9 @@ class MiniIDE(Gtk.Window):
         self.set_default_size(1360, 820)
         self.root = os.path.abspath(root)
         self.recents = load_recents()
+        self.session = load_session()
+        self.session_enabled = self.session["enabled"]
+        self._restore_session_enabled = len(sys.argv) <= 1 or sys.argv[1] == "--last"
         self.panels = []
         self.mode = "normal"
 
@@ -1936,19 +2127,75 @@ class MiniIDE(Gtk.Window):
         self.btn_multitask.connect("clicked", self.on_multitask_click)
         self.btn_multitask.set_no_show_all(True)
         self.btn_multitask.set_visible(True)
+        self.btn_session = Gtk.ToggleButton(
+            label="Session: ON" if self.session_enabled else "Session: OFF")
+        self.btn_session.set_active(self.session_enabled)
+        self.btn_session.set_tooltip_text("Restore open projects and files when Mini-IDE starts")
+        self.btn_session.get_style_context().add_class("session-toggle")
+        self.btn_session.connect("toggled", self.on_session_toggle)
+        self.btn_tree = Gtk.Button(label="Files")
+        self.btn_tree.set_tooltip_text("Hide or show the file tree")
+        self.btn_tree.get_style_context().add_class("panel-toggle")
+        self.btn_tree.connect("clicked", self.on_global_tree_toggle)
         self.hb = Gtk.HeaderBar()
         self.hb.set_show_close_button(True)
         self.hb.set_title(os.path.basename(self.root))
         self.hb.pack_start(btn_openfolder)
         self.hb.pack_start(self.btn_add)
         self.hb.pack_start(self.btn_multitask)
+        self.hb.pack_start(self.btn_session)
+        self.hb.pack_start(self.btn_tree)
         self.set_titlebar(self.hb)
 
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
         save_recents(self.root)
+        if self._restore_session_enabled and self.session_enabled and self.session["projects"]:
+            GLib.idle_add(self.restore_session)
+
+    def on_session_toggle(self, btn):
+        self.session_enabled = btn.get_active()
+        btn.set_label("Session: ON" if self.session_enabled else "Session: OFF")
+        if self.session_enabled:
+            save_session(self)
+
+    def on_global_tree_toggle(self, btn):
+        if self.main_panel is not None:
+            self.main_panel.toggle_tree()
+
+    def restore_session(self):
+        if not self._restore_session_enabled or not self.session_enabled:
+            return False
+        saved = self.session["projects"]
+        if not saved:
+            return False
+        if self.session.get("mode") == "multitask" or len(saved) > 1:
+            self.enter_multitask()
+        first = saved[0]
+        if os.path.abspath(first["root"]) != self.main_panel.root:
+            self.main_panel.shutdown()
+            self.content.remove(self.main_panel)
+            self.panels = []
+            self.main_panel = ProjectPanel(first["root"],
+                                           "compact" if self.mode == "multitask" else "full")
+            self.panels.append(self.main_panel)
+        for item in saved[1:]:
+            self.open_project(item["root"])
+        for panel, item in zip(self.panels, saved):
+            for fpath in item["files"]:
+                if os.path.isfile(fpath) and path_inside(panel.root, fpath):
+                    panel.open_file(fpath)
+            for _ in range(max(0, item["terminals"] - len(panel.cmd_terms))):
+                panel.add_command_tab()
+            panel._tree_collapsed = bool(item.get("tree_hidden", False))
+            panel._tabs_collapsed = bool(item.get("terminals_hidden", False))
+            panel._apply_tree_state()
+            panel._apply_tabs_state()
+        self.rebuild_layout()
+        return False
 
     def on_destroy(self, *args):
+        save_session(self)
         for panel in list(self.panels):
             panel.shutdown()
         Gtk.main_quit()
@@ -1957,6 +2204,7 @@ class MiniIDE(Gtk.Window):
         for panel in list(self.panels):
             if not panel.request_close():
                 return True
+        save_session(self)
         return False
 
     # ---------------- multitasking ----------------
@@ -2107,8 +2355,11 @@ class MiniIDE(Gtk.Window):
         self.content.show_all()
         for p in self.panels:
             p._apply_editor_visibility()
-        self.set_title("Multitask — %d project%s" % (len(self.panels),
-                                                     "s" if len(self.panels) > 1 else ""))
+        if self.mode == "multitask":
+            self.set_title("Multitask — %d project%s" % (
+                len(self.panels), "s" if len(self.panels) > 1 else ""))
+        else:
+            self.set_title(os.path.basename(self.main_panel.root))
         GLib.idle_add(self._mt_sizes)
 
     def _build_panes(self, widgets):
@@ -2180,11 +2431,15 @@ class MiniIDE(Gtk.Window):
 if __name__ == "__main__":
     folder = FOLDER
     if len(sys.argv) <= 1 or folder == "--last":
-        try:
-            rec = json.load(open(RECENT_FILE))
-            folder = rec[0] if rec else None
-        except Exception:
-            folder = None
+        session = load_session()
+        if session["enabled"] and session["projects"]:
+            folder = session["projects"][0]["root"]
+        else:
+            try:
+                rec = json.load(open(RECENT_FILE))
+                folder = rec[0] if rec else None
+            except Exception:
+                folder = None
     if not folder:
         dlg = Gtk.FileChooserDialog(title="Select a project",
                                     action=Gtk.FileChooserAction.SELECT_FOLDER)
