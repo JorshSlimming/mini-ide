@@ -92,8 +92,11 @@ treeview.view { border-color: #151517; }
 box.tree-toolbar { background-color: #151517; border-bottom: 1px solid #37373C; padding: 3px 4px 5px 4px; }
 box.tree-path { padding: 1px 0px 2px 0px; }
 box.tree-actions { padding-top: 2px; }
-box.project-bar { background-color: #151517; border-bottom: 1px solid #37373C; padding: 2px 4px; }
-box.project-bar label.project-name { color: #EDEDED; font-size: 13px; }
+.project-bar { background-color: #151517; border-bottom: 1px solid #37373C; padding: 2px 4px; }
+eventbox.project-modal-backdrop { background-color: rgba(0,0,0,0.45); }
+box.project-confirm { background-color: #171719; border: 1px solid #454748; border-radius: 6px; padding: 14px; }
+box.project-confirm label { color: #D4D4D4; }
+.project-bar label.project-name { color: #EDEDED; font-size: 13px; }
 box.terminal-actions button { min-width: 25px; min-height: 26px; padding: 2px 6px; }
 button.panel-toggle { background-color: #242428; border-color: #37373C; }
 button.panel-toggle:hover { background-color: #303234; border-color: #3994BC; }
@@ -264,6 +267,7 @@ class ProjectPanel(Gtk.Box):
         self.cmd_terms = []
         tab_actions = Gtk.Box(spacing=2)
         tab_actions.get_style_context().add_class("terminal-actions")
+        self.tab_actions = tab_actions
         plus_btn = Gtk.Button(label="+")
         plus_btn.set_tooltip_text("New terminal (Ctrl+T)")
         plus_btn.connect("clicked", lambda w: self.add_command_tab())
@@ -409,22 +413,29 @@ class ProjectPanel(Gtk.Box):
             self.main_v.pack1(self.top_h, True, False)
             self.main_v.pack2(self.bottom_h, True, False)
             self.main_v.connect("size-allocate", self.on_main_v_alloc)
-            bar = Gtk.Box(spacing=4)
+            bar = Gtk.Overlay()
             bar.get_style_context().add_class("project-bar")
+            controls = Gtk.Box(spacing=4)
+            controls.set_hexpand(True)
+            bar.add(controls)
             self.btn_tree = Gtk.Button(label="Files")
             self.btn_tree.get_style_context().add_class("panel-toggle")
             self.btn_tree.set_tooltip_text("Hide the file tree")
             self.btn_tree.connect("clicked", self.toggle_tree)
-            bar.pack_start(self.btn_tree, False, False, 2)
-            lbl = Gtk.Label(xalign=0)
+            controls.pack_start(self.btn_tree, False, False, 2)
+            self._move_terminal_toggle(controls)
+            lbl = Gtk.Label(xalign=0.5)
             lbl.get_style_context().add_class("project-name")
             lbl.set_markup("<b>%s</b>" % GLib.markup_escape_text(os.path.basename(self.root)))
-            bar.pack_start(lbl, True, True, 4)
+            lbl.set_justify(Gtk.Justification.CENTER)
+            lbl.set_halign(Gtk.Align.CENTER)
+            lbl.set_valign(Gtk.Align.CENTER)
+            bar.add_overlay(lbl)
             if self.on_close:
                 bx = Gtk.Button(label="✕")
                 bx.set_tooltip_text("Close project (kills its opencode)")
                 bx.connect("clicked", lambda w: self.on_close(self))
-                bar.pack_start(bx, False, False, 2)
+                controls.pack_end(bx, False, False, 2)
             self.pack_start(bar, False, False, 2)
             self.pack_start(self.main_v, True, True, 0)
             self.root_drop.set_visible(True)
@@ -443,6 +454,7 @@ class ProjectPanel(Gtk.Box):
             self.main_h.pack2(self.right_v, True, False)
             self.main_h.set_position(280)
             self.root_drop.set_visible(False)
+            self._move_terminal_toggle(self.tab_actions)
             self.pack_start(self.main_h, True, True, 0)
         GLib.idle_add(self._apply_tabs_state)
         GLib.idle_add(self._apply_tree_state)
@@ -474,6 +486,15 @@ class ProjectPanel(Gtk.Box):
             self.editor_pane.hide()
         else:
             self.editor_pane.show()
+
+    def _move_terminal_toggle(self, container):
+        parent = self.btn_collapse.get_parent()
+        if parent is container:
+            return
+        if parent is not None:
+            parent.remove(self.btn_collapse)
+        container.pack_start(self.btn_collapse, False, False, 0)
+        container.show_all()
 
     def _term_visible(self):
         if self.layout == "compact" and self._compact_tabbed:
@@ -1755,11 +1776,12 @@ class ProjectPanel(Gtk.Box):
 
     def _collapse_tabs(self):
         try:
-            self.tabs.show_all()
             if self.layout == "compact":
+                self.tabs.hide()
                 w = self.bottom_h.get_allocated_width()
-                self.bottom_h.set_position(max(0, w - 30))
+                self.bottom_h.set_position(max(0, w))
             else:
+                self.tabs.show_all()
                 h = self.right_v.get_allocated_height()
                 self.right_v.set_position(max(0, h - 30))
         except Exception:
@@ -2123,6 +2145,7 @@ class MiniIDE(Gtk.Window):
         self.session_enabled = self.session["enabled"]
         self._restore_session_enabled = len(sys.argv) <= 1 or sys.argv[1] == "--last"
         self.panels = []
+        self._panel_views = {}
         self.mode = "normal"
 
         provider = Gtk.CssProvider()
@@ -2349,9 +2372,58 @@ class MiniIDE(Gtk.Window):
             self.open_project(dlg.get_filename())
         dlg.destroy()
 
-    def close_panel(self, panel):
-        if panel not in self.panels:
-            return
+    def _confirm_panel_close(self, panel):
+        view = self._panel_views.get(panel)
+        if view is None:
+            return self._confirm_window_close(panel)
+
+        backdrop = Gtk.EventBox()
+        backdrop.get_style_context().add_class("project-modal-backdrop")
+        backdrop.set_hexpand(True)
+        backdrop.set_vexpand(True)
+        backdrop.set_above_child(True)
+
+        confirm = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        confirm.get_style_context().add_class("project-confirm")
+        confirm.set_halign(Gtk.Align.CENTER)
+        confirm.set_valign(Gtk.Align.CENTER)
+
+        title = Gtk.Label()
+        title.set_markup("<b>Close project</b>")
+        title.set_justify(Gtk.Justification.CENTER)
+        confirm.pack_start(title, False, False, 0)
+        detail = Gtk.Label("'%s' and its opencode will be closed." % os.path.basename(panel.root))
+        detail.set_line_wrap(True)
+        detail.set_justify(Gtk.Justification.CENTER)
+        confirm.pack_start(detail, False, False, 0)
+
+        actions = Gtk.Box(spacing=6)
+        actions.set_halign(Gtk.Align.CENTER)
+        no_btn = Gtk.Button(label="No")
+        yes_btn = Gtk.Button(label="Yes")
+        actions.pack_start(no_btn, True, True, 0)
+        actions.pack_start(yes_btn, True, True, 0)
+        confirm.pack_start(actions, False, False, 0)
+
+        response = {"yes": False}
+        loop = GLib.MainLoop()
+
+        def finish(yes):
+            response["yes"] = yes
+            view.remove(confirm)
+            view.remove(backdrop)
+            loop.quit()
+
+        no_btn.connect("clicked", lambda w: finish(False))
+        yes_btn.connect("clicked", lambda w: finish(True))
+        view.add_overlay(backdrop)
+        view.add_overlay(confirm)
+        backdrop.show()
+        confirm.show_all()
+        loop.run()
+        return response["yes"]
+
+    def _confirm_window_close(self, panel):
         dlg = Gtk.MessageDialog(transient_for=self, modal=True,
                                 message_type=Gtk.MessageType.WARNING,
                                 buttons=Gtk.ButtonsType.YES_NO,
@@ -2359,7 +2431,12 @@ class MiniIDE(Gtk.Window):
                                 secondary_text="'%s' and its opencode will be closed." % os.path.basename(panel.root))
         resp = dlg.run()
         dlg.destroy()
-        if resp != Gtk.ResponseType.YES:
+        return resp == Gtk.ResponseType.YES
+
+    def close_panel(self, panel):
+        if panel not in self.panels:
+            return
+        if not self._confirm_panel_close(panel):
             return
         if not panel.request_close():
             return
@@ -2378,12 +2455,14 @@ class MiniIDE(Gtk.Window):
                 parent.remove(p)
         self.btn_multitask.set_visible(bool(self.panels))
         if not self.panels:
+            self._panel_views = {}
             self.set_title("Mini-IDE — add a project")
             box = self.make_empty_slot()
             self.content.pack_start(box, True, True, 0)
             self.content.show_all()
             return
         self._mt_panes = []
+        self._panel_views = {}
         container = self._build_panes(list(self.panels))
         self._mt_container = container
         self.content.pack_start(container, True, True, 0)
@@ -2400,7 +2479,15 @@ class MiniIDE(Gtk.Window):
 
     def _build_panes(self, widgets):
         if len(widgets) == 1:
-            return widgets[0]
+            panel = widgets[0]
+            if self.mode != "multitask":
+                return panel
+            view = Gtk.Overlay()
+            view.set_hexpand(True)
+            view.set_vexpand(True)
+            view.add(panel)
+            self._panel_views[panel] = view
+            return view
         mid = len(widgets) // 2
         pane = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
         self._mt_panes.append((pane, mid, len(widgets)))
