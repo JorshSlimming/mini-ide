@@ -272,7 +272,7 @@ class ProjectPanel(Gtk.Box):
         plus_btn.set_tooltip_text("New terminal (Ctrl+T)")
         plus_btn.connect("clicked", lambda w: self.add_command_tab())
         tab_actions.pack_start(plus_btn, False, False, 0)
-        self.btn_collapse = Gtk.Button(label="▾")
+        self.btn_collapse = Gtk.Button(label="Hide terminal")
         self.btn_collapse.set_tooltip_text("Hide terminal")
         self.btn_collapse.connect("clicked", self.toggle_tabs)
         tab_actions.pack_start(self.btn_collapse, False, False, 0)
@@ -527,6 +527,16 @@ class ProjectPanel(Gtk.Box):
             self.top_h.pack2(self.opencode_term, True, False)
             self.top_h.show_all()
             self._apply_editor_visibility()
+        if n == 0:
+            GLib.idle_add(self._expand_opencode)
+
+    def _expand_opencode(self):
+        try:
+            if self.layout == "compact" and not self.editor_pane.get_visible():
+                self.top_h.set_position(0)
+        except Exception:
+            pass
+        return False
 
     # ---------------- terminals ----------------
     def make_terminal(self):
@@ -1766,11 +1776,11 @@ class ProjectPanel(Gtk.Box):
 
     def _apply_tabs_state(self):
         if self._tabs_collapsed:
-            self.btn_collapse.set_label("▴")
+            self.btn_collapse.set_label("Show terminal")
             self.btn_collapse.set_tooltip_text("Show terminal")
             GLib.idle_add(self._collapse_tabs)
         else:
-            self.btn_collapse.set_label("▾")
+            self.btn_collapse.set_label("Hide terminal")
             self.btn_collapse.set_tooltip_text("Hide terminal")
             GLib.idle_add(self._restore_tabs)
 
