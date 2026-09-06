@@ -474,11 +474,23 @@ class ProjectPanel(Gtk.Box):
             if w > 50 and not (self._tree_collapsed or self._tabs_collapsed):
                 self.bottom_h.set_position(int(w * 0.35))
             if h > 50:
-                self.main_v.set_position(int(h * 0.58))
+                if self._tree_collapsed or self._tabs_collapsed:
+                    self.main_v.set_position(h)
+                else:
+                    self.main_v.set_position(int(h * 0.58))
             if w > 50 and h > 50:
                 self._compact_needs_size = False
         except Exception:
             pass
+
+    def _apply_compact_bottom_visibility(self):
+        if self.layout != "compact":
+            return
+        if self._tree_collapsed or self._tabs_collapsed:
+            self.bottom_h.hide()
+        else:
+            self.bottom_h.show()
+        GLib.idle_add(self._apply_compact_sizes)
 
     # ---------------- editor/terminal visibility ----------------
     def _apply_editor_visibility(self):
@@ -1746,6 +1758,8 @@ class ProjectPanel(Gtk.Box):
                     self.btn_tree.set_tooltip_text("Hide the file tree")
         except Exception:
             pass
+        if self.layout == "compact":
+            self._apply_compact_bottom_visibility()
         return False
 
     def _collapse_tree(self, pane):
@@ -1783,6 +1797,8 @@ class ProjectPanel(Gtk.Box):
             self.btn_collapse.set_label("Hide terminal")
             self.btn_collapse.set_tooltip_text("Hide terminal")
             GLib.idle_add(self._restore_tabs)
+        if self.layout == "compact":
+            self._apply_compact_bottom_visibility()
 
     def _collapse_tabs(self):
         try:

@@ -43,7 +43,7 @@ Multiple instances can be opened (each folder in its own window).
 - File management: rename (F2), delete (Del), create in-place with Enter/Esc
 - Drag & drop from the system file manager → copies to the destination folder
 - Drag files and folders inside the tree → moves them to the hovered folder (with root containment and recursive-move protection)
-- The `Files` button hides the file tree without losing its width; the terminal arrow hides the command terminal without losing its height
+- The `Files` and terminal buttons hide the lower multitask panels; hiding either one expands OpenCode to fill the project panel
 - Material Icon Theme icons with the exact mappings from the VS Code extension
 - OpenCode Terminal palette: charcoal surfaces, light terminal text, blue focus and orange accents
 - Mini-IDE logo in PNG format for the desktop and application menu
