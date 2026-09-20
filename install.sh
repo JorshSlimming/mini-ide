@@ -30,7 +30,7 @@ cat > "$APPS/mini-ide.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Mini-IDE
-Comment=Lightweight browser and editor for working with opencode
+Comment=Lightweight browser and editor for working with omp
 Exec=python3 "$BIN/mini-ide.py" %F
 Icon=mini-ide
 Terminal=false

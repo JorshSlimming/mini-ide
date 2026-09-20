@@ -1,12 +1,29 @@
 #!/usr/bin/env python3
 # mini-ide v9: modo multitasking dinámico (agrega/cierra proyectos libremente).
-import sys, os, shutil, csv, json, subprocess, math
+import sys, os, shutil, csv, json, subprocess, math, time
 from itertools import islice
 from mini_ide.settings import WARN_LARGE, MAX_LARGE, MAX_PDF_PIXELS
 from mini_ide.file_ops import (atomic_write, validate_child_name,
                                create_new_file, create_new_dir, path_inside,
                                copy_dest_safe)
 from mini_ide.document import DocumentState, doc_relocator, docs_under
+from mini_ide import runners as ide_runners
+
+
+def _set_button_markup(btn, markup):
+    """Gtk.Button no tiene use-markup: se pinta el Gtk.Label hijo."""
+    try:
+        child = btn.get_child()
+        if not isinstance(child, Gtk.Label):
+            btn.set_label(" ")
+            child = btn.get_child()
+        child.set_use_markup(True)
+        child.set_markup(markup)
+    except Exception:
+        try:
+            btn.set_label(markup)
+        except Exception:
+            pass
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -30,9 +47,9 @@ except Exception:
     pass
 
 FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-OPENCODE = (os.environ.get("MINI_IDE_OPENCODE")
-            or shutil.which("opencode")
-            or os.path.expanduser("~/.opencode/bin/opencode"))
+OMP = (os.environ.get("MINI_IDE_OMP")
+       or shutil.which("omp")
+       or os.path.expanduser("~/.local/bin/omp"))
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
 RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
@@ -137,6 +154,12 @@ notebook tab button:hover { background-color: rgba(255,255,255,0.15); }
 label, button, headerbar, notebook, treeview { text-shadow: none; -gtk-icon-shadow: none; }
 .root-drop { border: 2px dashed #5B9CF0; background-color: #151517; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
 .root-drop:hover { background-color: rgba(91,156,240,0.2); }
+button.runner-btn { font-weight: bold; font-size: 12px; border-width: 2px; }
+button.runner-on { color: #7CE38B; border-color: #2E7D32; background-color: rgba(46,125,50,0.25); }
+button.runner-off { color: #F14C4C; border-color: #B71C1C; background-color: rgba(183,28,28,0.25); }
+button.runner-busy { color: #FFB300; border-color: #FF8F00; background-color: rgba(255,143,0,0.20); }
+button.runner-none { color: #8C8C8C; border-color: #3A3A40; }
+button.runner-wait { color: #5B9CF0; border-color: #24557D; }
 """
 
 THEME_JSON = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/dist/material-icons.json")
@@ -217,7 +240,7 @@ def icon_for(name, is_dir=False, expanded=False):
 
 
 class ProjectPanel(Gtk.Box):
-    """A complete project: opencode + editor + tree + terminals.
+    """A complete project: omp + editor + tree + terminals.
     layout 'full' (normal mode) or 'compact' (multitasking)."""
 
     def __init__(self, root, layout="full", on_close=None):
@@ -231,7 +254,7 @@ class ProjectPanel(Gtk.Box):
         self.open_widgets = {}
         self.ed_paths = {}
         self.players = []
-        self.opencode_pid = None
+        self.omp_pid = None
         self._compact_tabbed = False
         self._shutdown = False
         self._reloading = False
@@ -243,6 +266,11 @@ class ProjectPanel(Gtk.Box):
         self._tree_positions = {"full": None, "compact": None}
         self._tabs_positions = {"full": None, "compact": None}
         self._compact_needs_size = True
+        # runner self-hosted (manual, sin daemons): se resuelve por convención
+        self.runner_info = ide_runners.resolve(self.root)
+        self.runner_state = "unknown"  # on|off|busy|none|wait|unknown
+        self.runner_btn = None
+        self._runner_op = False
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -256,9 +284,9 @@ class ProjectPanel(Gtk.Box):
         self.editor_pane.pack_start(self.ed_tabs, True, True, 0)
         self.editor_pane.hide()
 
-        # opencode
-        self.opencode_term = self.make_terminal()
-        self.spawn_opencode()
+        # omp
+        self.omp_term = self.make_terminal()
+        self.spawn_omp()
 
         # command terminals
         self.tabs = Gtk.Notebook()
@@ -380,6 +408,205 @@ class ProjectPanel(Gtk.Box):
         self.populate(None, self.root, self.store)
         self.watch_path(self.root)
 
+    # ---------------- self-hosted runner (100% manual) ----------------
+    def _runner_paint(self):
+        btn = self.runner_btn
+        if btn is None:
+            return
+        info = self.runner_info or {}
+        for cls in ("runner-on", "runner-off", "runner-busy",
+                    "runner-none", "runner-wait"):
+            btn.get_style_context().remove_class(cls)
+        st = self.runner_state
+        if st == "busy":
+            label = "◐ RUNNER BUSY"
+            cls = "runner-busy"
+            tip = ("%s: ejecutando un job.\n"
+                   "Click para apagar (pide confirmación)."
+                   % info.get("repo", "?"))
+        elif st == "wait":
+            label = "… RUNNER …"
+            cls = "runner-wait"
+            tip = "Operación en curso…"
+        else:
+            _st, label, cls, tip = ide_runners.presentation(info, short=True)
+            if _st in ("on", "off", "none"):
+                self.runner_state = _st
+        btn.get_style_context().add_class(cls)
+        self._runner_cls = cls
+        _set_button_markup(btn, "<b>%s</b>" % GLib.markup_escape_text(label))
+        btn.set_tooltip_text(tip)
+
+    def _runner_refresh(self):
+        """Refresco local barato (sin red). Vuelve False para idle_add."""
+        if self._runner_op:
+            return False
+        info = self.runner_info or {}
+        if not info.get("has_runner"):
+            self.runner_state = "none"
+        else:
+            ls = ide_runners.local_state(info.get("unit", ""))
+            if ls == "active":
+                if self.runner_state != "busy":
+                    self.runner_state = "on"
+            elif ls in ("inactive", "failed"):
+                self.runner_state = "off"
+            else:
+                self.runner_state = "unknown"
+        try:
+            self._runner_paint()
+        except Exception:
+            pass
+        return False
+
+    def _runner_refresh_remote(self):
+        """Una sola consulta remota (hover): online/busy. En thread."""
+        info = self.runner_info or {}
+        if not info.get("has_runner") or not info.get("installed"):
+            return
+        st = ide_runners.remote_state(info["org"], info["repo"],
+                                      info["agent"])
+        if st is None:
+            return
+        online, busy = st
+        if self.runner_btn is None or self._runner_op:
+            return
+        ls = ide_runners.local_state(info["unit"])
+        if busy and ls == "active":
+            self.runner_state = "busy"
+        elif not online and ls == "active":
+            self.runner_state = "wait"
+        elif ls == "active":
+            self.runner_state = "on"
+        else:
+            self.runner_state = "off"
+        GLib.idle_add(self._runner_paint)
+
+    def on_runner_hover(self, w, ev):
+        import threading
+        threading.Thread(target=self._runner_refresh_remote,
+                         daemon=True).start()
+        return False
+
+    def _runner_info_dialog(self, text, secondary=""):
+        win = self.get_toplevel()
+        dlg = Gtk.MessageDialog(
+            transient_for=win if isinstance(win, Gtk.Window) else None,
+            modal=True, message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK, text=text)
+        if secondary:
+            dlg.format_secondary_text(secondary)
+        dlg.run()
+        dlg.destroy()
+
+    def on_runner_toggle(self, btn):
+        import threading
+        if self._runner_op:
+            return
+        info = self.runner_info or {}
+        if not info.get("has_runner"):
+            self._runner_info_dialog(
+                "Sin runner",
+                "«%s» no tiene runner configurado.\nCorre ./config.sh en "
+                "una carpeta actions-runner-* y luego `runners rescan`."
+                % os.path.basename(self.root))
+            return
+        if self.runner_state in ("wait",):
+            return
+        self._runner_op = True
+        self.runner_state = "wait"
+        self._runner_paint()
+        btn.set_sensitive(False)
+
+        def done_ok(kind):
+            self._runner_op = False
+            btn.set_sensitive(True)
+            if kind == "started":
+                self.runner_state = "wait"
+                self._runner_paint()
+                threading.Thread(target=self._runner_await_up,
+                                 daemon=True).start()
+            else:
+                self.runner_state = "off"
+                GLib.idle_add(self._runner_refresh)
+
+        def job_toggle():
+            try:
+                if not info.get("installed"):
+                    if not ide_runners.ensure_installed(info):
+                        GLib.idle_add(self._runner_info_dialog, "Error",
+                                      "No se pudo instalar la unit de %s."
+                                      % info.get("repo"))
+                        GLib.idle_add(done_ok, "error")
+                        return
+                    info["installed"] = True
+                ls = ide_runners.local_state(info["unit"])
+                if ls == "active":
+                    st = ide_runners.remote_state(
+                        info["org"], info["repo"], info["agent"])
+                    if st is not None and st[1]:
+                        GLib.idle_add(self._runner_confirm_stop_busy, info,
+                                      btn, done_ok)
+                        return
+                    ide_runners.stop_unit(info["unit"])
+                    ide_runners.wait_inactive(info["unit"], timeout=40)
+                    GLib.idle_add(done_ok, "stopped")
+                else:
+                    if ide_runners.start_unit(info["unit"]):
+                        GLib.idle_add(done_ok, "started")
+                    else:
+                        GLib.idle_add(self._runner_info_dialog, "Error",
+                                      "No se pudo prender %s."
+                                      % info.get("repo"))
+                        GLib.idle_add(done_ok, "error")
+            except Exception as ex:
+                print("runner toggle:", ex)
+                GLib.idle_add(done_ok, "error")
+
+        threading.Thread(target=job_toggle, daemon=True).start()
+
+    def _runner_await_up(self):
+        """Tras prender: espera a active y una chequeada remota."""
+        info = self.runner_info or {}
+        for _i in range(15):
+            if ide_runners.local_state(info.get("unit", "")) == "active":
+                break
+            time.sleep(2)
+        self._runner_refresh_remote()
+        GLib.idle_add(self._runner_op_done_up)
+
+    def _runner_op_done_up(self):
+        self._runner_op = False
+        if self.runner_btn is not None:
+            self.runner_btn.set_sensitive(True)
+        if self.runner_state == "wait":
+            self.runner_state = "unknown"  # fuerza recómputo en refresh
+        self._runner_refresh()
+        return False
+
+    def _runner_confirm_stop_busy(self, info, btn, done_ok):
+        win = self.get_toplevel()
+        dlg = Gtk.MessageDialog(
+            transient_for=win if isinstance(win, Gtk.Window) else None,
+            modal=True, message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text="Runner «%s» con job en curso" % info.get("repo"))
+        dlg.format_secondary_text(
+            "Hay un job ejecutándose. ¿Apagar igual? (puede fallar el job)")
+        dlg.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Apagar igual", Gtk.ResponseType.YES)
+        resp = dlg.run()
+        dlg.destroy()
+        import threading
+
+        def job():
+            if resp == Gtk.ResponseType.YES:
+                ide_runners.stop_unit(info["unit"])
+                ide_runners.wait_inactive(info["unit"], timeout=40)
+            GLib.idle_add(done_ok, "stopped")
+
+        threading.Thread(target=job, daemon=True).start()
+
     # ---------------- layout ----------------
     def set_layout(self, layout):
         self.layout = layout
@@ -388,7 +615,7 @@ class ProjectPanel(Gtk.Box):
         for ch in list(self.get_children()):
             self.remove(ch)
         # detach shared widgets from their old containers
-        for w in (self.opencode_term, self.editor_pane, self.tree_box, self.tabs,
+        for w in (self.omp_term, self.editor_pane, self.tree_box, self.tabs,
                   getattr(self, "top_h", None)):
             if w is None:
                 continue
@@ -404,7 +631,7 @@ class ProjectPanel(Gtk.Box):
         if layout == "compact":
             self.top_h = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
             self.top_h.pack1(self.editor_pane, False, False)
-            self.top_h.pack2(self.opencode_term, True, False)
+            self.top_h.pack2(self.omp_term, True, False)
             self.top_h.connect("size-allocate", self.on_top_alloc)
             self.bottom_h = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
             self.bottom_h.pack1(self.tree_box, True, False)
@@ -423,6 +650,14 @@ class ProjectPanel(Gtk.Box):
             self.btn_tree.set_tooltip_text("Hide the file tree")
             self.btn_tree.connect("clicked", self.toggle_tree)
             controls.pack_start(self.btn_tree, False, False, 2)
+            self.runner_btn = Gtk.Button()
+            self.runner_btn.get_style_context().add_class("runner-btn")
+            self.runner_btn.connect("clicked", self.on_runner_toggle)
+            self.runner_btn.connect("enter-notify-event",
+                                    self.on_runner_hover)
+            controls.pack_start(self.runner_btn, False, False, 2)
+            self._runner_paint()
+            GLib.idle_add(self._runner_refresh)
             self._move_terminal_toggle(controls)
             lbl = Gtk.Label(xalign=0.5)
             lbl.get_style_context().add_class("project-name")
@@ -433,7 +668,7 @@ class ProjectPanel(Gtk.Box):
             bar.add_overlay(lbl)
             if self.on_close:
                 bx = Gtk.Button(label="✕")
-                bx.set_tooltip_text("Close project (kills its opencode)")
+                bx.set_tooltip_text("Close project (kills its omp)")
                 bx.connect("clicked", lambda w: self.on_close(self))
                 controls.pack_end(bx, False, False, 2)
             self.pack_start(bar, False, False, 2)
@@ -443,7 +678,7 @@ class ProjectPanel(Gtk.Box):
         else:
             self.top_h = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
             self.top_h.pack1(self.editor_pane, False, False)
-            self.top_h.pack2(self.opencode_term, True, False)
+            self.top_h.pack2(self.omp_term, True, False)
             self.top_h.connect("size-allocate", self.on_top_alloc)
             self.right_v = Gtk.Paned.new(Gtk.Orientation.VERTICAL)
             self.right_v.pack1(self.top_h, True, False)
@@ -510,8 +745,8 @@ class ProjectPanel(Gtk.Box):
 
     def _term_visible(self):
         if self.layout == "compact" and self._compact_tabbed:
-            return self.opencode_term.get_parent() is self.ed_tabs
-        return self.opencode_term.get_visible()
+            return self.omp_term.get_parent() is self.ed_tabs
+        return self.omp_term.get_visible()
 
     def _mt_panel_width(self):
         try:
@@ -526,23 +761,23 @@ class ProjectPanel(Gtk.Box):
         n = len(self.open_widgets)
         if n >= 2 and not self._compact_tabbed:
             self._compact_tabbed = True
-            self.top_h.remove(self.opencode_term)
-            if self.opencode_term.get_parent() is None:
-                self.opencode_term.show()
-                self.ed_tabs.append_page(self.opencode_term, Gtk.Label("OpenCode"))
-            self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.opencode_term))
+            self.top_h.remove(self.omp_term)
+            if self.omp_term.get_parent() is None:
+                self.omp_term.show()
+                self.ed_tabs.append_page(self.omp_term, Gtk.Label("omp"))
+            self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.omp_term))
             self.ed_tabs.show_all()
             GLib.idle_add(self._mt_panel_width)
         elif n < 2 and self._compact_tabbed:
             self._compact_tabbed = False
-            self.ed_tabs.remove_page(self.ed_tabs.page_num(self.opencode_term))
-            self.top_h.pack2(self.opencode_term, True, False)
+            self.ed_tabs.remove_page(self.ed_tabs.page_num(self.omp_term))
+            self.top_h.pack2(self.omp_term, True, False)
             self.top_h.show_all()
             self._apply_editor_visibility()
         if n == 0:
-            GLib.idle_add(self._expand_opencode)
+            GLib.idle_add(self._expand_omp)
 
-    def _expand_opencode(self):
+    def _expand_omp(self):
         try:
             if self.layout == "compact" and not self.editor_pane.get_visible():
                 self.top_h.set_position(0)
@@ -586,7 +821,7 @@ class ProjectPanel(Gtk.Box):
         item = Gtk.MenuItem(label="Paste")
         item.connect("activate", lambda w: self.term_paste(term))
         menu.append(item)
-        if term is self.opencode_term:
+        if term is self.omp_term:
             sep = Gtk.SeparatorMenuItem()
             menu.append(sep)
             hint = Gtk.MenuItem(label="Select text: hold Shift")
@@ -613,22 +848,22 @@ class ProjectPanel(Gtk.Box):
         except Exception as ex:
             print("spawn error (%s):" % argv[0], ex)
 
-    def spawn_opencode(self):
-        if not OPENCODE or not os.path.isfile(OPENCODE) or not os.access(OPENCODE, os.X_OK):
+    def spawn_omp(self):
+        if not OMP or not os.path.isfile(OMP) or not os.access(OMP, os.X_OK):
             try:
                 dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                         message_type=Gtk.MessageType.ERROR,
                                         buttons=Gtk.ButtonsType.OK,
-                                        text="opencode not found",
-                                        secondary_text="Set MINI_IDE_OPENCODE to a valid path "
-                                                       "or install opencode in PATH.")
+                                        text="omp not found",
+                                        secondary_text="Set MINI_IDE_OMP to a valid path "
+                                                       "or install omp in PATH.")
                 dlg.run()
                 dlg.destroy()
             except Exception:
                 pass
             return
-        self._spawn_async(self.opencode_term, self.root, [OPENCODE],
-                          lambda pid: setattr(self, "opencode_pid", pid))
+        self._spawn_async(self.omp_term, self.root, [OMP],
+                          lambda pid: setattr(self, "omp_pid", pid))
 
     def on_term_selection(self, term):
         try:
@@ -2048,7 +2283,7 @@ class ProjectPanel(Gtk.Box):
         return False
 
     def shutdown(self):
-        """Mata opencode, terminales y audio del panel."""
+        """Mata omp, terminales y audio del panel."""
         if self._shutdown:
             return
         self._shutdown = True
@@ -2072,9 +2307,9 @@ class ProjectPanel(Gtk.Box):
             except Exception:
                 pass
         self.players.clear()
-        if self.opencode_pid:
+        if self.omp_pid:
             try:
-                os.kill(self.opencode_pid, 15)
+                os.kill(self.omp_pid, 15)
             except Exception:
                 pass
         for t in self.cmd_terms:
@@ -2083,7 +2318,7 @@ class ProjectPanel(Gtk.Box):
             except Exception:
                 pass
         try:
-            self.opencode_term.kill_sync(Vte.TerminalKill.KILL_SHELL, None)
+            self.omp_term.kill_sync(Vte.TerminalKill.KILL_SHELL, None)
         except Exception:
             pass
 
@@ -2216,10 +2451,18 @@ class MiniIDE(Gtk.Window):
         self.hb.pack_start(self.btn_session)
         self.hb.pack_start(self.btn_tree)
         self.set_titlebar(self.hb)
+        # indicador runner modo normal (en multitask cada panel tiene el suyo)
+        self.runner_btn_hb = Gtk.Button()
+        self.runner_btn_hb.get_style_context().add_class("runner-btn")
+        self.runner_btn_hb.connect("clicked", self.on_hb_runner_toggle)
+        self.hb.pack_start(self.runner_btn_hb)
 
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
         save_recents(self.root)
+        self._runner_tick_id = GLib.timeout_add_seconds(
+            20, self._runner_tick)
+        self._hb_runner_sync()
         if self._restore_session_enabled and self.session_enabled and self.session["projects"]:
             GLib.idle_add(self.restore_session)
 
@@ -2277,6 +2520,12 @@ class MiniIDE(Gtk.Window):
 
     def on_destroy(self, *args):
         save_session(self)
+        if getattr(self, "_runner_tick_id", None):
+            try:
+                GLib.source_remove(self._runner_tick_id)
+            except Exception:
+                pass
+            self._runner_tick_id = None
         for panel in list(self.panels):
             panel.shutdown()
         Gtk.main_quit()
@@ -2285,8 +2534,238 @@ class MiniIDE(Gtk.Window):
         for panel in list(self.panels):
             if not panel.request_close():
                 return True
+        if not self._runner_gate(list(self.panels), "Cerrar Mini-IDE"):
+            return True
         save_session(self)
         return False
+
+    # ---------------- runners self-hosted (manual) ----------------
+    def _runner_tick(self):
+        try:
+            for p in list(self.panels):
+                if getattr(p, "runner_btn", None) is not None:
+                    p._runner_refresh()
+            self._hb_runner_sync()
+        except Exception:
+            pass
+        return True
+
+    def on_hb_runner_toggle(self, btn):
+        if self.mode != "normal" or self.main_panel is None:
+            return
+        self.main_panel.on_runner_toggle(btn)
+
+    def _hb_runner_sync(self):
+        btn = getattr(self, "runner_btn_hb", None)
+        if btn is None:
+            return
+        if self.mode != "normal" or self.main_panel is None:
+            btn.hide()
+            return
+        btn.show()
+        panel = self.main_panel
+        info = getattr(panel, "runner_info", None) or {}
+        st = getattr(panel, "runner_state", "unknown")
+        if st == "busy":
+            label, cls = "◐ RUNNER BUSY", "runner-busy"
+            tip = "%s: ejecutando un job." % info.get("repo", "?")
+        elif st == "wait":
+            label, cls = "… RUNNER …", "runner-wait"
+            tip = "Operación en curso…"
+        else:
+            _st, label, cls, tip = ide_runners.presentation(info)
+        for old in ("runner-on", "runner-off", "runner-busy",
+                    "runner-none", "runner-wait"):
+            btn.get_style_context().remove_class(old)
+        btn.get_style_context().add_class(cls)
+        try:
+            _set_button_markup(
+                btn, "<b>%s</b>" % GLib.markup_escape_text(label))
+            btn.set_tooltip_text(tip + "\nClick para encender/apagar.")
+            btn.set_sensitive(True)
+        except Exception:
+            pass
+
+    def _runner_gate(self, panels, title):
+        """Gate de cierre para runners activos. Misma rutina en todos
+        los cierres: apaga los no-busy (con espera) y pregunta por los
+        busy. Devuelve True si se puede cerrar."""
+        import threading
+        targets = []
+        for p in panels:
+            info = getattr(p, "runner_info", None)
+            if not info or not info.get("has_runner"):
+                continue
+            if not info.get("installed"):
+                continue
+            if ide_runners.local_state(info["unit"]) == "active":
+                targets.append((p, info))
+        if not targets:
+            return True
+
+        dlg = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dlg.set_default_size(480, 240)
+        box = dlg.get_content_area()
+        log_lbl = Gtk.Label(xalign=0)
+        log_lbl.set_line_wrap(True)
+        log_lbl.set_markup("<b>Revisando runners…</b>")
+        box.pack_start(log_lbl, True, True, 8)
+        spin = Gtk.Spinner()
+        box.pack_start(spin, False, False, 4)
+        spin.start()
+        btn_cancel = dlg.add_button("Cancelar cierre", Gtk.ResponseType.CANCEL)
+        box.show_all()
+
+        lines = []
+        cancel = threading.Event()
+        result = {"ok": False}
+        state = {"done": False, "choice": False}
+        choice = {"pending": []}
+        btns = {}
+        loop = GLib.MainLoop()
+
+        def log(text):
+            lines.append(text)
+            try:
+                log_lbl.set_markup("\n".join(lines[-8:]))
+            except Exception:
+                pass
+
+        def log_async(text):
+            GLib.idle_add(log, text)
+
+        def finish(ok, resp):
+            if state["done"]:
+                return
+            state["done"] = True
+            result["ok"] = bool(ok)
+            try:
+                dlg.response(resp)
+            except Exception:
+                pass
+            try:
+                loop.quit()
+            except Exception:
+                pass
+
+        def stop_one(info):
+            ide_runners.stop_unit(info["unit"])
+            return ide_runners.wait_inactive(
+                info["unit"], timeout=40,
+                cancelled=cancel.is_set)
+
+        def on_resp(d, resp):
+            if state["done"]:
+                return
+            if resp == Gtk.ResponseType.APPLY and state["choice"]:
+                for b in (btns.get("wait"), btns.get("keep"), btn_cancel):
+                    if b is None:
+                        continue
+                    try:
+                        b.set_sensitive(False)
+                    except Exception:
+                        pass
+                spin.show()
+                spin.start()
+                threading.Thread(target=wait_then_stop,
+                                 daemon=True).start()
+            elif resp == Gtk.ResponseType.YES and state["choice"]:
+                finish(True, Gtk.ResponseType.OK)
+            elif resp == Gtk.ResponseType.CANCEL:
+                cancel.set()
+                finish(False, Gtk.ResponseType.CANCEL)
+            elif resp == Gtk.ResponseType.OK:
+                finish(result["ok"], Gtk.ResponseType.OK)
+            # otros: ignorar
+
+        def worker():
+            try:
+                pending_busy = []
+                for _p, info in targets:
+                    if cancel.is_set() or state["done"]:
+                        return
+                    name = info.get("repo", "?")
+                    log_async("Consultando <b>%s</b>…" % name)
+                    st = ide_runners.remote_state(
+                        info["org"], info["repo"], info["agent"])
+                    if cancel.is_set() or state["done"]:
+                        return
+                    if st is not None and not st[1]:
+                        log_async("Apagando runner <b>%s</b>…" % name)
+                        if stop_one(info):
+                            log_async(
+                                "Runner <b>%s</b> apagado." % name)
+                        else:
+                            log_async(
+                                "Runner <b>%s</b> no se pudo apagar "
+                                "(sigue activo)." % name)
+                            pending_busy.append(info)
+                    else:
+                        pending_busy.append(info)
+                if cancel.is_set() or state["done"]:
+                    return
+                if not pending_busy:
+                    result["ok"] = True
+                    GLib.idle_add(finish, True, Gtk.ResponseType.OK)
+                    return
+                names = ", ".join(i.get("repo", "?") for i in pending_busy)
+                log_async(
+                    "Runner(s) con job en curso o sin verificar: "
+                    "<b>%s</b>.\nElegí cómo seguir." % names)
+                GLib.idle_add(show_busy_choices, pending_busy)
+            except Exception as ex:
+                print("runner gate:", ex)
+                GLib.idle_add(finish, False, Gtk.ResponseType.CANCEL)
+
+        def show_busy_choices(pending_busy):
+            if state["done"]:
+                return False
+            state["choice"] = True
+            choice["pending"] = list(pending_busy)
+            spin.stop()
+            spin.hide()
+            btns["wait"] = dlg.add_button("Esperar a que terminen",
+                                          Gtk.ResponseType.APPLY)
+            btns["keep"] = dlg.add_button("Cerrar y dejarlos prendidos",
+                                          Gtk.ResponseType.YES)
+            btns["wait"].grab_default()
+            box.show_all()
+            return False
+
+        def wait_then_stop():
+            try:
+                for info in list(choice["pending"]):
+                    if cancel.is_set() or state["done"]:
+                        return
+                    name = info.get("repo", "?")
+                    log_async("Esperando a <b>%s</b>…" % name)
+                    ok = ide_runners.wait_not_busy(
+                        info["org"], info["repo"], info["agent"],
+                        cancelled=cancel.is_set)
+                    if cancel.is_set() or state["done"]:
+                        return
+                    if ok:
+                        log_async("Apagando runner <b>%s</b>…" % name)
+                        stop_one(info)
+                    else:
+                        log_async(
+                            "Runner <b>%s</b>: se deja prendido." % name)
+                result["ok"] = True
+                GLib.idle_add(finish, True, Gtk.ResponseType.OK)
+            except Exception as ex:
+                print("runner gate wait:", ex)
+                GLib.idle_add(finish, False, Gtk.ResponseType.CANCEL)
+
+        # NOTE: on_resp usa b_wait/b_keep via action_area (ver arriba).
+        dlg.connect("response", on_resp)
+        threading.Thread(target=worker, daemon=True).start()
+        loop.run()
+        try:
+            self._runner_tick()
+        except Exception:
+            pass
+        dlg.destroy()
+        return bool(result["ok"])
 
     # ---------------- multitasking ----------------
     def on_multitask_click(self, btn):
@@ -2317,6 +2796,7 @@ class MiniIDE(Gtk.Window):
         self.btn_multitask.set_label("Exit multitask")
         self.btn_add.set_visible(True)
         self.rebuild_layout()
+        self._hb_runner_sync()
 
     def exit_multitask(self):
         if not self.panels or self.main_panel is None:
@@ -2328,7 +2808,7 @@ class MiniIDE(Gtk.Window):
                                     message_type=Gtk.MessageType.QUESTION,
                                     buttons=Gtk.ButtonsType.YES_NO,
                                     text="Exit multitask",
-                                    secondary_text="Will close: %s (and their opencode). Continue?" % names)
+                                    secondary_text="Will close: %s (and their omp). Continue?" % names)
             resp = dlg.run()
             dlg.destroy()
             if resp != Gtk.ResponseType.YES:
@@ -2336,6 +2816,8 @@ class MiniIDE(Gtk.Window):
             for p in extra:
                 if not p.request_close():
                     return
+            if not self._runner_gate(extra, "Exit multitask"):
+                return
             for p in extra:
                 p.shutdown()
             self.panels = [self.main_panel]
@@ -2355,6 +2837,7 @@ class MiniIDE(Gtk.Window):
         self.content.pack_start(self.main_panel, True, True, 0)
         self.content.show_all()
         self.main_panel._apply_editor_visibility()
+        self._hb_runner_sync()
 
     def make_empty_slot(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -2418,7 +2901,7 @@ class MiniIDE(Gtk.Window):
         title.set_markup("<b>Close project</b>")
         title.set_justify(Gtk.Justification.CENTER)
         confirm.pack_start(title, False, False, 0)
-        detail = Gtk.Label("'%s' and its opencode will be closed." % os.path.basename(panel.root))
+        detail = Gtk.Label("'%s' and its omp will be closed." % os.path.basename(panel.root))
         detail.set_line_wrap(True)
         detail.set_justify(Gtk.Justification.CENTER)
         confirm.pack_start(detail, False, False, 0)
@@ -2454,7 +2937,7 @@ class MiniIDE(Gtk.Window):
                                 message_type=Gtk.MessageType.WARNING,
                                 buttons=Gtk.ButtonsType.YES_NO,
                                 text="Close project",
-                                secondary_text="'%s' and its opencode will be closed." % os.path.basename(panel.root))
+                                secondary_text="'%s' and its omp will be closed." % os.path.basename(panel.root))
         resp = dlg.run()
         dlg.destroy()
         return resp == Gtk.ResponseType.YES
@@ -2465,6 +2948,8 @@ class MiniIDE(Gtk.Window):
         if not self._confirm_panel_close(panel):
             return
         if not panel.request_close():
+            return
+        if not self._runner_gate([panel], "Close project"):
             return
         panel.shutdown()
         self.panels.remove(panel)
@@ -2570,7 +3055,7 @@ class MiniIDE(Gtk.Window):
                     return False
                 panel = self._panel_for(focused) or self.main_panel
                 if panel is not None:
-                    panel.term_paste(panel.opencode_term)
+                    panel.term_paste(panel.omp_term)
                     return True
                 return False
             if self.mode == "multitask" and k in tuple("123456789"):
