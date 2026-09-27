@@ -1,0 +1,25 @@
+{
+  "name": "PanelIDE Graphite + Teal",
+  "version": 1,
+  "colors": {
+    "surface_root": "#0F1418",
+    "surface_panel": "#1B2226",
+    "surface_elevated": "#2A343A",
+    "surface_terminal": "#101517",
+    "surface_hover": "#223138",
+    "surface_selected": "#163D3C",
+    "border_subtle": "#26343A",
+    "border_focus": "#00A995",
+    "text_primary": "#D9E0E5",
+    "text_secondary": "#91A0AA",
+    "text_muted": "#697780",
+    "accent": "#00D1B2",
+    "accent_hover": "#16E0C2",
+    "accent_soft": "#123D39",
+    "highlight": "#7DD3FC",
+    "success": "#46D37D",
+    "warning": "#E6AE47",
+    "danger": "#F36C6C",
+    "terminal_fg": "#C7D0D5"
+  }
+}

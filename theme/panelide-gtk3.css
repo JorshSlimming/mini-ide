@@ -1,0 +1,196 @@
+/* PanelIDE — Graphite + Teal — GTK3 starter theme
+   Target: Debian 13 / GTK3. Keep file-type icons from Material Icon Theme.
+*/
+window, box, paned, scrolledwindow, notebook {
+  background-color: #0F1418;
+  color: #D9E0E5;
+}
+
+headerbar {
+  background-color: #151B1F;
+  background-image: none;
+  border-bottom: 1px solid #26343A;
+  min-height: 36px;
+  padding: 2px 5px;
+}
+headerbar:backdrop { background-color: #13181C; }
+headerbar .title { color: #E9EFF2; font-weight: 600; }
+headerbar .subtitle { color: #697780; }
+headerbar button,
+button.chrome,
+button.icon-btn,
+button.panel-toggle {
+  background: transparent;
+  background-image: none;
+  color: #AAB4BE;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 2px 7px;
+  box-shadow: none;
+  text-shadow: none;
+}
+headerbar button:hover,
+button.chrome:hover,
+button.icon-btn:hover,
+button.panel-toggle:hover {
+  background-color: #223138;
+  border-color: #26343A;
+  color: #D9E0E5;
+}
+headerbar button:active,
+button.chrome:active,
+button.icon-btn:active,
+button.panel-toggle:active {
+  background-color: #163D3C;
+  border-color: #00A995;
+}
+button.session-toggle:checked {
+  background-color: #123D39;
+  border-color: #00A995;
+  color: #8CF3E3;
+}
+
+/* Tree */
+treeview {
+  background-color: #151B1F;
+  color: #C8D0D5;
+  border: none;
+}
+treeview:hover { background-color: #1B252A; }
+treeview:selected {
+  background-color: #163D3C;
+  color: #EAFDFC;
+}
+box.tree-toolbar {
+  background-color: #151B1F;
+  border-bottom: 1px solid #26343A;
+  padding: 4px 5px;
+}
+box.tree-path { padding: 1px 0 2px 0; }
+box.tree-actions { padding-top: 2px; }
+
+/* Tabs: mostly borderless; accent line carries selection. */
+notebook { background-color: #0F1418; }
+notebook header {
+  background-color: #151B1F;
+  background-image: none;
+  border: none;
+  border-bottom: 1px solid #26343A;
+  min-height: 32px;
+}
+notebook tab {
+  background: transparent;
+  min-height: 32px;
+  padding: 3px 11px;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+notebook tab label { color: #81909A; }
+notebook tab:hover { background-color: #1B252A; }
+notebook tab:active,
+notebook tab:checked {
+  background-color: #11181C;
+  border-bottom: 2px solid #00D1B2;
+}
+notebook tab:active label,
+notebook tab:checked label { color: #E3EAEE; }
+notebook tab button {
+  background: transparent;
+  border: none;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+}
+notebook tab button:hover { background-color: #223138; }
+
+/* Panes: thin, quiet separators. */
+paned > separator {
+  background-color: #26343A;
+  min-width: 1px;
+  min-height: 1px;
+}
+
+/* Project strip for multitask. */
+.project-bar {
+  background-color: #151B1F;
+  border-bottom: 1px solid #26343A;
+  min-height: 30px;
+  padding: 1px 5px;
+}
+.project-bar label.project-name {
+  color: #E3EAEE;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Generic controls */
+button {
+  color: #AAB4BE;
+  background-color: #1B2226;
+  background-image: none;
+  border: 1px solid #26343A;
+  border-radius: 6px;
+  min-height: 28px;
+  padding: 2px 8px;
+  box-shadow: none;
+}
+button:hover { background-color: #223138; color: #D9E0E5; }
+button:active { background-color: #163D3C; border-color: #00A995; }
+button:focus, entry:focus { border-color: #00A995; }
+entry {
+  background-color: #151B1F;
+  color: #D9E0E5;
+  border: 1px solid #26343A;
+  border-radius: 6px;
+}
+.dim-label { color: #697780; }
+label { color: #C8D0D5; }
+
+/* Terminal / viewer support classes */
+box.terminal-actions button { min-width: 28px; min-height: 28px; padding: 1px; }
+.viewer-toolbar {
+  background-color: #151B1F;
+  border-bottom: 1px solid #26343A;
+  padding: 3px 5px;
+}
+.root-drop {
+  border: 1px dashed #00A995;
+  background-color: #13201F;
+  padding: 10px;
+  border-radius: 6px;
+  margin: 3px 4px;
+}
+.root-drop:hover { background-color: #163D3C; }
+
+/* Runner semantics: reserve color for state, not general chrome. */
+button.runner-btn { font-weight: 600; }
+button.runner-on   { color: #72E59B; border-color: #2A6F49; background-color: #16271D; }
+button.runner-off  { color: #F58C8C; border-color: #6E3535; background-color: #281818; }
+button.runner-busy { color: #F0C267; border-color: #755B28; background-color: #2A2418; }
+button.runner-wait { color: #7DD3FC; border-color: #2C6279; background-color: #14242C; }
+button.runner-none { color: #697780; border-color: transparent; background-color: transparent; }
+/* Focus and media controls. */
+box.project-confirm {
+  background-color: #1B2226;
+  border: 1px solid #00A995;
+  border-radius: 10px;
+  padding: 18px;
+}
+box.project-confirm label { color: #D9E0E5; }
+eventbox.project-modal-backdrop { background-color: rgba(4, 7, 9, 0.76); }
+scale trough {
+  background-color: #26343A;
+  border-radius: 3px;
+  min-height: 6px;
+}
+scale highlight { background-color: #00A995; }
+scale slider {
+  background-color: #D9E0E5;
+  border: 1px solid #00A995;
+  border-radius: 8px;
+  min-width: 12px;
+  min-height: 12px;
+}

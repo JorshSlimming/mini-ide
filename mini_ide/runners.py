@@ -1,4 +1,4 @@
-"""GitHub self-hosted runners atados a mini-ide: 100% manual, sin daemons.
+"""GitHub self-hosted runner status and controls integrated with PanelIDE.
 
 - Descubrimiento dinámico por convención: basename de la carpeta del
   proyecto == nombre del repo; se busca en ~/actions-runner*/.runner
@@ -13,6 +13,7 @@ import os
 import subprocess
 import threading
 import time
+
 
 HOME = os.path.expanduser("~")
 USER_SYSTEMD = os.path.join(HOME, ".config", "systemd", "user")
@@ -196,16 +197,15 @@ def wait_not_busy(org, repo, agent, poll=10.0, cancelled=None):
         time.sleep(poll)
 
 
-def presentation(info, local=None, short=False):
-    """(state, label, css, tip) base para pintar el indicador.
+def presentation(info, local=None):
+    """(state, CSS class, tooltip) for a runner status icon.
 
     Solo estado local (sin red). busy/wait los pone la capa UI encima.
-    short=True: texto compacto para la barra de multitask.
     """
     info = info or {}
     if not info.get("has_runner"):
         base = os.path.basename(info.get("root", "?"))
-        return ("none", "— SIN RUNNER", "runner-none",
+        return ("none", "runner-none",
                 "«%s» no tiene runner configurado.\n"
                 "Corre ./config.sh en una carpeta actions-runner-* "
                 "y luego `runners rescan`." % base)
@@ -214,9 +214,7 @@ def presentation(info, local=None, short=False):
     if local is None:
         local = local_state(unit)
     if local == "active":
-        label = "● ON" if short else "● RUNNER ON"
-        return ("on", label, "runner-on",
+        return ("on", "runner-on",
                 "%s\n%s\nClick para APAGAR." % (repo, unit))
-    label = "○ OFF" if short else "○ RUNNER OFF — click para encender"
     tip = "%s\n%s\nAPAGADO: click para ENCENDER." % (repo, unit)
-    return ("off", label, "runner-off", tip)
+    return ("off", "runner-off", tip)

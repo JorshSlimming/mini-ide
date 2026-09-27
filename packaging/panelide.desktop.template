@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PanelIDE
+Comment=Lightweight multi-pane development workspace
+Exec=panelide %F
+Icon=panelide
+Terminal=false
+Categories=Development;IDE;
+MimeType=inode/directory;
+StartupNotify=true

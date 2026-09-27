@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="panelide-dark" _name="PanelIDE Dark" version="1.0">
+  <author>PanelIDE</author>
+  <_description>Graphite + Teal source theme for PanelIDE.</_description>
+  <color name="bg" value="#0F1418"/>
+  <color name="fg" value="#D9E0E5"/>
+  <color name="muted" value="#697780"/>
+  <color name="teal" value="#00D1B2"/>
+  <color name="cyan" value="#7DD3FC"/>
+  <color name="green" value="#8ED081"/>
+  <color name="amber" value="#E6AE47"/>
+  <color name="rose" value="#F38BA8"/>
+  <style name="text" foreground="fg" background="bg"/>
+  <style name="selection" background="#244047" foreground="#F1F7F9"/>
+  <style name="current-line" background="#141B20"/>
+  <style name="line-numbers" foreground="muted" background="#11171B"/>
+  <style name="def:comment" foreground="#6F8584" italic="true"/>
+  <style name="def:string" foreground="green"/>
+  <style name="def:number" foreground="amber"/>
+  <style name="def:boolean" foreground="amber"/>
+  <style name="def:keyword" foreground="cyan" bold="true"/>
+  <style name="def:type" foreground="#79E5D8"/>
+  <style name="def:function" foreground="#A6DAFF"/>
+  <style name="def:preprocessor" foreground="rose"/>
+  <style name="def:special-char" foreground="teal"/>
+</style-scheme>

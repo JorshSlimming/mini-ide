@@ -1,48 +1,22 @@
-# Mini-IDE — Notes and planned improvements
+# PanelIDE — Notes
 
 ## What it is
-Custom Mini-IDE (Python/GTK, native) created to replace VS Code (~8.4 GB RAM)
-in the workflow: **opencode writes the code, the Mini-IDE is used to browse/view files and
-run opencode**. Usage: ~83 MB.
 
-**Launch:** `python3 ~/.local/bin/mini-ide.py /path/to/folder`
-(multiple instances can be opened — each folder in its own window).
+PanelIDE is a GTK3 project browser/editor and terminal workspace. Its project UI is independent of the executable hosted in the embedded **Harness** terminal. The shell uses a dark Graphite + Teal theme, compact icon-first controls, and a separate GtkSource color scheme. File/folder icons continue to come from Material Icon Theme when available.
 
-## Shortcuts and usage
-- Double-click file → opens images in the built-in preview, PDFs in the viewer, audio in the player, CSV/TSV as colored tables, or other text in GtkSource
-- Double-click folder → expand/collapse
-- `F2` → rename file/folder
-- `Del` → delete (with confirmation)
-- `Ctrl+S` → save (autosave after 0.8 s)
-- `Ctrl+T` → new command terminal (or the `+` button in the T1/T2 tab bar)
-- `+ File` / `+ Folder` → create **in-place** in the tree (Enter confirms, Esc cancels)
-- `Open folder` (header) → opens the folder in a new instance
-- Drag & drop from the system file manager → copies to the destination folder in the tree
-- Dragging an item inside the tree moves it into the hovered folder; external drops still copy
-- Tree with **auto-refresh** (GFileMonitor): files created by opencode/terminal
-  appear on their own, also in subfolders
-- Terminals: selecting text = automatic copy to clipboard (VS Code style)
-- Session toggle restores open projects, files, command-terminal count and collapsed panels on the next launch
-- `Files` and terminal collapse controls preserve each panel's last size when restored
-- Icons: Material Icon Theme (Philipp Kief), exact mappings read from
-  `dist/material-icons.json` of the extension installed in VS Code
-- Visual palette: OpenCode Terminal-inspired charcoal, light text, blue focus and orange accents
-- Logo: original Mini-IDE icon in `icons/mini-ide.png`
+Launch from a checkout with `python3 panelide.py /path/to/project`, or use `panelide /path/to/project` after installing. See `README.md` for dependencies, configuration variables, and legacy-state migration.
 
-## Planned improvements
-1. **LSP in Mini-IDE** — autocomplete and live diagnostics in the editor
-   (useful if code is ever written by hand; opencode doesn't need it).
-2. **opencode session monitor** — see how many sessions are open and close
-   idle ones with a click (each idle session costs ~600 MB-1 GB).
-3. **Lazy-load GStreamer** — initialize audio only when the first audio file
-   is opened, instead of at startup (recovers ~5 MB at boot).
-4. **Verify Material Icon Theme version** — if the extension updates in
-   VS Code, point `THEME_JSON` to the new path (currently fixed at 5.37.0).
+## Current behavior
 
-## Usage data (measured)
-| Component | RAM |
-|---|---|
-| Mini-IDE (GTK shell) | 83 MB |
-| opencode (per session, idle) | ~600 MB - 1 GB |
-| VS Code (closed) | 8.4 GB when it was open |
-| Dart/Flutter helpers (only if VS Code open) | ~390 MB |
+- Project tree updates through GFileMonitor, including nested folders.
+- Text tabs autosave after 0.8 seconds; Ctrl+S saves immediately.
+- CSV/TSV tables, images, PDFs, and audio use dedicated viewers.
+- Multitask view maintains independent project panels and can restore projects, open files, terminal counts, and collapsed-panel state.
+- Runner controls inspect/manage configured GitHub Actions self-hosted runners; they are separate from the generic Harness terminal.
+- `PANELIDE_HARNESS` selects the embedded executable. The old `MINI_IDE_OMP` setting and `omp` default remain for migration compatibility.
+
+## Possible future work
+
+1. Add optional LSP completion and diagnostics to the GtkSource editor.
+2. Initialize GStreamer only when an audio file is opened.
+3. Detect Material Icon Theme versions dynamically instead of relying on the installed extension's 5.37.0 path.

@@ -1,29 +1,17 @@
 #!/usr/bin/env python3
-# mini-ide v9: modo multitasking dinámico (agrega/cierra proyectos libremente).
+# PanelIDE: dynamic multitask layout (projects can be added or closed freely).
 import sys, os, shutil, csv, json, subprocess, math, time
 from itertools import islice
-from mini_ide.settings import WARN_LARGE, MAX_LARGE, MAX_PDF_PIXELS
+from mini_ide.settings import (WARN_LARGE, MAX_LARGE, MAX_PDF_PIXELS,
+                               migrate_legacy_config)
 from mini_ide.file_ops import (atomic_write, validate_child_name,
                                create_new_file, create_new_dir, path_inside,
                                copy_dest_safe)
 from mini_ide.document import DocumentState, doc_relocator, docs_under
 from mini_ide import runners as ide_runners
+from mini_ide import multitask_ui as mt_ui
 
 
-def _set_button_markup(btn, markup):
-    """Gtk.Button no tiene use-markup: se pinta el Gtk.Label hijo."""
-    try:
-        child = btn.get_child()
-        if not isinstance(child, Gtk.Label):
-            btn.set_label(" ")
-            child = btn.get_child()
-        child.set_use_markup(True)
-        child.set_markup(markup)
-    except Exception:
-        try:
-            btn.set_label(markup)
-        except Exception:
-            pass
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -47,120 +35,56 @@ except Exception:
     pass
 
 FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-OMP = (os.environ.get("MINI_IDE_OMP")
-       or shutil.which("omp")
-       or os.path.expanduser("~/.local/bin/omp"))
+HARNESS_CMD = (os.environ.get("PANELIDE_HARNESS")
+               or os.environ.get("MINI_IDE_OMP")
+               or shutil.which("omp")
+               or os.path.expanduser("~/.local/bin/omp"))
 ICONS = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/icons")
 SCRIPT = os.path.abspath(__file__)
-RECENT_FILE = os.environ.get("MINI_IDE_RECENTS") or os.path.expanduser("~/.config/mini-ide/recent.json")
-SESSION_FILE = os.environ.get("MINI_IDE_SESSION") or os.path.expanduser("~/.config/mini-ide/session.json")
-APP_ICON = os.path.join(os.path.dirname(SCRIPT), "icons", "mini-ide.png")
+SCRIPT_DIR = os.path.dirname(SCRIPT)
+CONFIG_DIR = (os.environ.get("PANELIDE_CONFIG_DIR")
+              or os.path.expanduser("~/.config/panelide"))
+LEGACY_CONFIG_DIR = os.path.expanduser("~/.config/mini-ide")
+migrate_legacy_config(LEGACY_CONFIG_DIR, CONFIG_DIR)
+RECENT_FILE = (os.environ.get("PANELIDE_RECENTS")
+               or os.environ.get("MINI_IDE_RECENTS")
+               or os.path.join(CONFIG_DIR, "recent.json"))
+SESSION_FILE = (os.environ.get("PANELIDE_SESSION")
+                or os.environ.get("MINI_IDE_SESSION")
+                or os.path.join(CONFIG_DIR, "session.json"))
+APP_ICON = os.path.join(SCRIPT_DIR, "app-icon", "png", "panelide-256.png")
+CSS_FILE = os.path.join(SCRIPT_DIR, "theme", "panelide-gtk3.css")
+SOURCE_THEME_DIR = os.path.join(SCRIPT_DIR, "theme")
+UI_ICON_DIR = os.path.join(SCRIPT_DIR, "ui-icons")
 
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "avif"}
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}
 CSV_EXT = {"csv", "tsv"}
-CSV_COLORS = ["#2E5E3E", "#1F4E6E", "#5E5E1F", "#6E3E1F", "#4A2E6E"]
+CSV_COLORS = ["#1B3433", "#1C303A", "#343222", "#33272A", "#2B2936"]
 
-VSC_CSS = b"""
-window { background-color: #0B0B0C; }
-box, paned, scrolledwindow, notebook { background-color: #0B0B0C; }
-box.titlebar { background-color: transparent; background-image: none; }
-headerbar box { background-color: transparent; background-image: none; }
-box.titlebar button {
-    background-color: transparent;
-    background-image: none;
-    border: none;
-    border-radius: 4px;
-    color: #D4D4D4;
-    min-width: 30px;
-    min-height: 24px;
-    padding: 0px 6px;
-}
-box.titlebar button:hover { background-color: rgba(255,255,255,0.12); }
-box.titlebar button:active { background-color: rgba(100,150,255,0.18); }
-box.titlebar label.title, box.titlebar label.subtitle { background-color: transparent; background-image: none; color: #BFBFBF; }
-headerbar { background-color: #171719; background-image: none; min-height: 0px; padding: 2px 4px; }
-headerbar:backdrop { background-color: #171719; background-image: none; }
-headerbar button {
-    background-color: #242428;
-    background-image: none;
-    color: #D4D4D4;
-    border: 1px solid #37373C;
-    border-radius: 4px;
-    min-height: 26px;
-    min-width: 24px;
-    padding: 3px 9px;
-}
-headerbar button:hover { background-color: rgba(255,255,255,0.12); border-color: #3A3B3C; }
-headerbar button:active { background-color: rgba(100,150,255,0.18); border-color: #3994BC; }
-headerbar button:backdrop { background-color: #171719; color: #8C8C8C; }
-headerbar label, headerbar .title, headerbar .subtitle, headerbar button label { color: #BFBFBF; font-size: 13px; text-shadow: none; }
-headerbar .title { background-color: transparent; background-image: none; color: #EDEDED; font-weight: 600; }
-headerbar button.titlebutton, headerbar button.titlebutton label { color: #D4D4D4; }
-headerbar button.titlebutton { background-color: transparent; background-image: none; border: none; border-radius: 4px; margin: 1px; min-width: 30px; min-height: 24px; }
-headerbar button.titlebutton:hover { background-color: rgba(255,255,255,0.12); }
-headerbar button.session-toggle:checked { background-color: #24557D; border-color: #5B9CF0; color: #F2F2F2; }
-headerbar button.session-toggle:checked:hover { background-color: #2D6998; }
-treeview { background-color: #151517; color: #C9C9CB; }
-treeview:hover { background-color: rgba(255,255,255,0.06); }
-treeview:selected { background-color: #24557D; color: #F2F2F2; }
-treeview:selected:backdrop { background-color: #303035; color: #C9C9CB; }
-treeview.view { border-color: #151517; }
-box.tree-toolbar { background-color: #151517; border-bottom: 1px solid #37373C; padding: 3px 4px 5px 4px; }
-box.tree-path { padding: 1px 0px 2px 0px; }
-box.tree-actions { padding-top: 2px; }
-.project-bar { background-color: #151517; border-bottom: 1px solid #37373C; padding: 2px 4px; }
-eventbox.project-modal-backdrop { background-color: rgba(0,0,0,0.45); }
-box.project-confirm { background-color: #171719; border: 1px solid #454748; border-radius: 6px; padding: 14px; }
-box.project-confirm label { color: #D4D4D4; }
-.project-bar label.project-name { color: #EDEDED; font-size: 13px; }
-box.terminal-actions button { min-width: 25px; min-height: 26px; padding: 2px 6px; }
-button.panel-toggle { background-color: #242428; border-color: #37373C; }
-button.panel-toggle:hover { background-color: #303234; border-color: #3994BC; }
-paned > separator { background-color: #454748; min-width: 2px; min-height: 2px; }
-button {
-    color: #BFBFBF;
-    background-color: #171719;
-    background-image: none;
-    border: 1px solid #2A2B2C;
-    border-radius: 4px;
-    min-height: 26px;
-    padding: 2px 8px;
-}
-button:hover { background-color: rgba(255,255,255,0.08); border-color: #3A3B3C; }
-button:active { background-color: rgba(100,150,255,0.15); }
-entry { background-color: #171719; color: #D0D0D2; border-color: #3A3A40; }
-scale trough { background-color: #303035; }
-.dim-label { color: #8C8C8C; }
-label { color: #BFBFBF; }
-notebook { background-color: #151517; }
-notebook header { background-color: #151517; background-image: none; border-color: #37373C; border-bottom: 1px solid #37373C; min-height: 34px; }
-notebook tab {
-    background-color: #151517;
-    min-height: 34px;
-    padding: 4px 12px;
-    border-radius: 4px 4px 0 0;
-    margin: 1px 1px 0 1px;
-}
-notebook tab label { color: #8C8C8C; }
-notebook tab:active, notebook tab:checked {
-    background-color: #0B0B0C;
-    border-bottom: 3px solid #3994BC;
-}
-notebook tab:active label, notebook tab:checked label { color: #EDEDED; }
-notebook tab button { min-width: 20px; min-height: 20px; padding: 0px; border-radius: 4px; }
-notebook tab button:hover { background-color: rgba(255,255,255,0.15); }
-.icon-btn { min-width: 28px; min-height: 28px; padding: 4px; }
-label, button, headerbar, notebook, treeview { text-shadow: none; -gtk-icon-shadow: none; }
-.root-drop { border: 2px dashed #5B9CF0; background-color: #151517; padding: 14px 12px; border-radius: 6px; margin: 3px 4px; }
-.root-drop:hover { background-color: rgba(91,156,240,0.2); }
-button.runner-btn { font-weight: bold; font-size: 12px; border-width: 2px; }
-button.runner-on { color: #7CE38B; border-color: #2E7D32; background-color: rgba(46,125,50,0.25); }
-button.runner-off { color: #F14C4C; border-color: #B71C1C; background-color: rgba(183,28,28,0.25); }
-button.runner-busy { color: #FFB300; border-color: #FF8F00; background-color: rgba(255,143,0,0.20); }
-button.runner-none { color: #8C8C8C; border-color: #3A3A40; }
-button.runner-wait { color: #5B9CF0; border-color: #24557D; }
-"""
+
+def set_button_icon(button, name, size=16, semantic=False):
+    category = "semantic" if semantic else "neutral"
+    icon_path = os.path.join(UI_ICON_DIR, category, name + ".svg")
+    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+        icon_path, size, size, True)
+    button.set_image(Gtk.Image.new_from_pixbuf(pixbuf))
+    button.set_always_show_image(True)
+
+
+def icon_button(name, tooltip, callback=None, toggle=False, *classes):
+    button_type = Gtk.ToggleButton if toggle else Gtk.Button
+    button = button_type()
+    set_button_icon(button, name)
+    button.set_tooltip_text(tooltip)
+    context = button.get_style_context()
+    context.add_class("chrome")
+    context.add_class("icon-btn")
+    for css_class in classes:
+        context.add_class(css_class)
+    if callback is not None:
+        button.connect("toggled" if toggle else "clicked", callback)
+    return button
 
 THEME_JSON = os.path.expanduser("~/.vscode/extensions/pkief.material-icon-theme-5.37.0/dist/material-icons.json")
 
@@ -240,7 +164,7 @@ def icon_for(name, is_dir=False, expanded=False):
 
 
 class ProjectPanel(Gtk.Box):
-    """A complete project: omp + editor + tree + terminals.
+    """A complete project: harness + editor + tree + terminals.
     layout 'full' (normal mode) or 'compact' (multitasking)."""
 
     def __init__(self, root, layout="full", on_close=None):
@@ -254,7 +178,7 @@ class ProjectPanel(Gtk.Box):
         self.open_widgets = {}
         self.ed_paths = {}
         self.players = []
-        self.omp_pid = None
+        self.harness_pid = None
         self._compact_tabbed = False
         self._shutdown = False
         self._reloading = False
@@ -274,7 +198,11 @@ class ProjectPanel(Gtk.Box):
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
-        self.dark_scheme = self.style_mgr.get_scheme("vs-dark") or self.style_mgr.get_scheme("oblivion")
+        if SOURCE_THEME_DIR not in self.style_mgr.get_search_path():
+            self.style_mgr.append_search_path(SOURCE_THEME_DIR)
+        self.dark_scheme = (self.style_mgr.get_scheme("panelide-dark")
+                            or self.style_mgr.get_scheme("oblivion")
+                            or self.style_mgr.get_scheme("vs-dark"))
 
         # editor with tabs
         self.ed_tabs = Gtk.Notebook()
@@ -284,9 +212,9 @@ class ProjectPanel(Gtk.Box):
         self.editor_pane.pack_start(self.ed_tabs, True, True, 0)
         self.editor_pane.hide()
 
-        # omp
-        self.omp_term = self.make_terminal()
-        self.spawn_omp()
+        # Generic harness terminal
+        self.harness_term = self.make_terminal()
+        self.spawn_harness()
 
         # command terminals
         self.tabs = Gtk.Notebook()
@@ -296,13 +224,12 @@ class ProjectPanel(Gtk.Box):
         tab_actions = Gtk.Box(spacing=2)
         tab_actions.get_style_context().add_class("terminal-actions")
         self.tab_actions = tab_actions
-        plus_btn = Gtk.Button(label="+")
-        plus_btn.set_tooltip_text("New terminal (Ctrl+T)")
-        plus_btn.connect("clicked", lambda w: self.add_command_tab())
+        plus_btn = icon_button("plus", "New terminal (Ctrl+T)",
+                               lambda w: self.add_command_tab())
         tab_actions.pack_start(plus_btn, False, False, 0)
-        self.btn_collapse = Gtk.Button(label="Hide terminal")
-        self.btn_collapse.set_tooltip_text("Hide terminal")
-        self.btn_collapse.connect("clicked", self.toggle_tabs)
+        self.btn_collapse = icon_button(
+            "panel-bottom", "Hide command terminals", self.toggle_tabs,
+            False, "panel-toggle")
         tab_actions.pack_start(self.btn_collapse, False, False, 0)
         self.tabs.set_action_widget(tab_actions, Gtk.PackType.END)
         tab_actions.show_all()
@@ -330,23 +257,21 @@ class ProjectPanel(Gtk.Box):
         self.tree.connect("row-expanded", self.on_expand)
         self.tree.connect("row-collapsed", self.on_collapse)
         self.tree.drag_source_set(Gdk.ModifierType.BUTTON1_MASK,
-                                  [Gtk.TargetEntry.new("application/x-mini-ide-path", 0, 81)],
+                                  [Gtk.TargetEntry.new("application/x-panelide-path", 0, 81)],
                                   Gdk.DragAction.MOVE)
         self.tree.connect("drag-data-get", self.on_drag_data_get)
         self.tree.drag_dest_set(Gtk.DestDefaults.ALL,
-                                [Gtk.TargetEntry.new("application/x-mini-ide-path", 0, 81),
+                                [Gtk.TargetEntry.new("application/x-panelide-path", 0, 81),
                                  Gtk.TargetEntry.new("text/uri-list", 0, 80)],
                                 Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
         self.tree.connect("drag-data-received", self.on_drop)
         self.scroll_tree = Gtk.ScrolledWindow()
         self.scroll_tree.add(self.tree)
 
-        btn_newfile = Gtk.Button(label="+ File")
-        btn_newfile.set_tooltip_text("New file")
-        btn_newfile.connect("clicked", lambda w: self.start_new("newfile"))
-        btn_newfolder = Gtk.Button(label="+ Folder")
-        btn_newfolder.set_tooltip_text("New folder")
-        btn_newfolder.connect("clicked", lambda w: self.start_new("newfolder"))
+        btn_newfile = icon_button(
+            "new-file", "New file", lambda w: self.start_new("newfile"))
+        btn_newfolder = icon_button(
+            "new-folder", "New folder", lambda w: self.start_new("newfolder"))
 
         self.path_lbl = Gtk.Label(xalign=0)
         self.path_lbl.set_width_chars(12)
@@ -355,20 +280,9 @@ class ProjectPanel(Gtk.Box):
         self.path_lbl.set_tooltip_text(self.root)
         self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>"
                                  % GLib.markup_escape_text(self.root))
-        btn_copy = Gtk.Button()
-        _copy_img = Gtk.Image.new_from_icon_name("edit-copy", Gtk.IconSize.LARGE_TOOLBAR)
-        _copy_img.set_pixel_size(24)
-        btn_copy.set_image(_copy_img)
-        btn_copy.set_tooltip_text("Copy folder path")
-        btn_copy.get_style_context().add_class("icon-btn")
-        btn_copy.connect("clicked", self.copy_path)
-        btn_open = Gtk.Button()
-        _open_img = Gtk.Image.new_from_icon_name("folder-open", Gtk.IconSize.LARGE_TOOLBAR)
-        _open_img.set_pixel_size(24)
-        btn_open.set_image(_open_img)
-        btn_open.set_tooltip_text("Open folder in file manager")
-        btn_open.get_style_context().add_class("icon-btn")
-        btn_open.connect("clicked", self.open_in_fm)
+        btn_copy = icon_button("copy", "Copy folder path", self.copy_path)
+        btn_open = icon_button(
+            "folder-open", "Open folder in file manager", self.open_in_fm)
 
         self.row_path = Gtk.Box(spacing=4)
         self.row_path.get_style_context().add_class("tree-path")
@@ -414,27 +328,30 @@ class ProjectPanel(Gtk.Box):
         if btn is None:
             return
         info = self.runner_info or {}
+        context = btn.get_style_context()
         for cls in ("runner-on", "runner-off", "runner-busy",
                     "runner-none", "runner-wait"):
-            btn.get_style_context().remove_class(cls)
-        st = self.runner_state
-        if st == "busy":
-            label = "◐ RUNNER BUSY"
+            context.remove_class(cls)
+        state = self.runner_state
+        if state == "busy":
+            icon, semantic = "runner-busy", True
             cls = "runner-busy"
-            tip = ("%s: ejecutando un job.\n"
-                   "Click para apagar (pide confirmación)."
+            tip = ("%s: executing a job.\n"
+                   "Click to stop it (confirmation required)."
                    % info.get("repo", "?"))
-        elif st == "wait":
-            label = "… RUNNER …"
+        elif state == "wait":
+            icon, semantic = "runner-busy", True
             cls = "runner-wait"
-            tip = "Operación en curso…"
+            tip = "Runner operation in progress…"
         else:
-            _st, label, cls, tip = ide_runners.presentation(info, short=True)
-            if _st in ("on", "off", "none"):
-                self.runner_state = _st
-        btn.get_style_context().add_class(cls)
+            resolved, cls, tip = ide_runners.presentation(info)
+            self.runner_state = resolved
+            icon = {"on": "runner-on", "off": "runner-off"}.get(
+                resolved, "runner")
+            semantic = resolved in ("on", "off")
+        context.add_class(cls)
         self._runner_cls = cls
-        _set_button_markup(btn, "<b>%s</b>" % GLib.markup_escape_text(label))
+        set_button_icon(btn, icon, semantic=semantic)
         btn.set_tooltip_text(tip)
 
     def _runner_refresh(self):
@@ -615,7 +532,7 @@ class ProjectPanel(Gtk.Box):
         for ch in list(self.get_children()):
             self.remove(ch)
         # detach shared widgets from their old containers
-        for w in (self.omp_term, self.editor_pane, self.tree_box, self.tabs,
+        for w in (self.harness_term, self.editor_pane, self.tree_box, self.tabs,
                   getattr(self, "top_h", None)):
             if w is None:
                 continue
@@ -631,7 +548,7 @@ class ProjectPanel(Gtk.Box):
         if layout == "compact":
             self.top_h = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
             self.top_h.pack1(self.editor_pane, False, False)
-            self.top_h.pack2(self.omp_term, True, False)
+            self.top_h.pack2(self.harness_term, True, False)
             self.top_h.connect("size-allocate", self.on_top_alloc)
             self.bottom_h = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
             self.bottom_h.pack1(self.tree_box, True, False)
@@ -640,37 +557,48 @@ class ProjectPanel(Gtk.Box):
             self.main_v.pack1(self.top_h, True, False)
             self.main_v.pack2(self.bottom_h, True, False)
             self.main_v.connect("size-allocate", self.on_main_v_alloc)
-            bar = Gtk.Overlay()
+            # A flexible title slot ellipsizes in narrow columns; icon-only
+            # controls keep their hit targets outside the title area.
+            bar = Gtk.Box(spacing=4)
             bar.get_style_context().add_class("project-bar")
             controls = Gtk.Box(spacing=4)
-            controls.set_hexpand(True)
-            bar.add(controls)
-            self.btn_tree = Gtk.Button(label="Files")
-            self.btn_tree.get_style_context().add_class("panel-toggle")
-            self.btn_tree.set_tooltip_text("Hide the file tree")
-            self.btn_tree.connect("clicked", self.toggle_tree)
+            controls.set_hexpand(False)
+            bar.pack_start(controls, False, False, 2)
+            self.btn_tree = icon_button(
+                "files", "Hide file tree", self.toggle_tree,
+                False, "panel-toggle")
+            self.btn_tree.set_hexpand(False)
             controls.pack_start(self.btn_tree, False, False, 2)
-            self.runner_btn = Gtk.Button()
-            self.runner_btn.get_style_context().add_class("runner-btn")
-            self.runner_btn.connect("clicked", self.on_runner_toggle)
+            self.runner_btn = icon_button(
+                "runner", "Runner status", self.on_runner_toggle,
+                False, "runner-btn")
+            self.runner_btn.set_hexpand(False)
             self.runner_btn.connect("enter-notify-event",
                                     self.on_runner_hover)
             controls.pack_start(self.runner_btn, False, False, 2)
             self._runner_paint()
             GLib.idle_add(self._runner_refresh)
             self._move_terminal_toggle(controls)
+            self.btn_collapse.set_hexpand(False)
             lbl = Gtk.Label(xalign=0.5)
             lbl.get_style_context().add_class("project-name")
             lbl.set_markup("<b>%s</b>" % GLib.markup_escape_text(os.path.basename(self.root)))
             lbl.set_justify(Gtk.Justification.CENTER)
             lbl.set_halign(Gtk.Align.CENTER)
             lbl.set_valign(Gtk.Align.CENTER)
-            bar.add_overlay(lbl)
+            lbl.set_hexpand(True)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(mt_ui.title_max_chars(3))
+            lbl.set_tooltip_text(self.root)
+            self.title_lbl = lbl
+            bar.pack_start(lbl, True, True, 2)
             if self.on_close:
-                bx = Gtk.Button(label="✕")
-                bx.set_tooltip_text("Close project (kills its omp)")
-                bx.connect("clicked", lambda w: self.on_close(self))
-                controls.pack_end(bx, False, False, 2)
+                bx = icon_button(
+                    "close", "Close project (stops its harness)",
+                    lambda w: self.on_close(self))
+                bx.set_hexpand(False)
+                bar.pack_end(bx, False, False, 2)
+            self.set_size_request(mt_ui.PANEL_MIN_PX, -1)
             self.pack_start(bar, False, False, 2)
             self.pack_start(self.main_v, True, True, 0)
             self.root_drop.set_visible(True)
@@ -678,7 +606,7 @@ class ProjectPanel(Gtk.Box):
         else:
             self.top_h = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
             self.top_h.pack1(self.editor_pane, False, False)
-            self.top_h.pack2(self.omp_term, True, False)
+            self.top_h.pack2(self.harness_term, True, False)
             self.top_h.connect("size-allocate", self.on_top_alloc)
             self.right_v = Gtk.Paned.new(Gtk.Orientation.VERTICAL)
             self.right_v.pack1(self.top_h, True, False)
@@ -690,6 +618,8 @@ class ProjectPanel(Gtk.Box):
             self.main_h.set_position(280)
             self.root_drop.set_visible(False)
             self._move_terminal_toggle(self.tab_actions)
+            self.title_lbl = None
+            self.set_size_request(-1, -1)
             self.pack_start(self.main_h, True, True, 0)
         GLib.idle_add(self._apply_tabs_state)
         GLib.idle_add(self._apply_tree_state)
@@ -737,16 +667,21 @@ class ProjectPanel(Gtk.Box):
     def _move_terminal_toggle(self, container):
         parent = self.btn_collapse.get_parent()
         if parent is container:
+            try:
+                self.btn_collapse.set_hexpand(False)
+            except Exception:
+                pass
             return
         if parent is not None:
             parent.remove(self.btn_collapse)
+        self.btn_collapse.set_hexpand(False)
         container.pack_start(self.btn_collapse, False, False, 0)
         container.show_all()
 
     def _term_visible(self):
         if self.layout == "compact" and self._compact_tabbed:
-            return self.omp_term.get_parent() is self.ed_tabs
-        return self.omp_term.get_visible()
+            return self.harness_term.get_parent() is self.ed_tabs
+        return self.harness_term.get_visible()
 
     def _mt_panel_width(self):
         try:
@@ -761,23 +696,22 @@ class ProjectPanel(Gtk.Box):
         n = len(self.open_widgets)
         if n >= 2 and not self._compact_tabbed:
             self._compact_tabbed = True
-            self.top_h.remove(self.omp_term)
-            if self.omp_term.get_parent() is None:
-                self.omp_term.show()
-                self.ed_tabs.append_page(self.omp_term, Gtk.Label("omp"))
-            self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.omp_term))
+            self.top_h.remove(self.harness_term)
+            if self.harness_term.get_parent() is None:
+                self.harness_term.show()
+                self.ed_tabs.append_page(self.harness_term, Gtk.Label("Harness"))
+            self.ed_tabs.set_current_page(self.ed_tabs.page_num(self.harness_term))
             self.ed_tabs.show_all()
             GLib.idle_add(self._mt_panel_width)
         elif n < 2 and self._compact_tabbed:
             self._compact_tabbed = False
-            self.ed_tabs.remove_page(self.ed_tabs.page_num(self.omp_term))
-            self.top_h.pack2(self.omp_term, True, False)
+            self.top_h.pack2(self.harness_term, True, False)
             self.top_h.show_all()
             self._apply_editor_visibility()
         if n == 0:
-            GLib.idle_add(self._expand_omp)
+            GLib.idle_add(self._expand_harness)
 
-    def _expand_omp(self):
+    def _expand_harness(self):
         try:
             if self.layout == "compact" and not self.editor_pane.get_visible():
                 self.top_h.set_position(0)
@@ -790,8 +724,8 @@ class ProjectPanel(Gtk.Box):
         term = Vte.Terminal()
         term.set_font(Pango.FontDescription("Monospace 10"))
         try:
-            fg = Gdk.RGBA(); fg.parse("#BBBEBF")
-            bg = Gdk.RGBA(); bg.parse("#191A1B")
+            fg = Gdk.RGBA(); fg.parse("#C7D0D5")
+            bg = Gdk.RGBA(); bg.parse("#101517")
             term.set_color_foreground(fg)
             term.set_color_background(bg)
         except Exception:
@@ -821,7 +755,7 @@ class ProjectPanel(Gtk.Box):
         item = Gtk.MenuItem(label="Paste")
         item.connect("activate", lambda w: self.term_paste(term))
         menu.append(item)
-        if term is self.omp_term:
+        if term is self.harness_term:
             sep = Gtk.SeparatorMenuItem()
             menu.append(sep)
             hint = Gtk.MenuItem(label="Select text: hold Shift")
@@ -848,22 +782,23 @@ class ProjectPanel(Gtk.Box):
         except Exception as ex:
             print("spawn error (%s):" % argv[0], ex)
 
-    def spawn_omp(self):
-        if not OMP or not os.path.isfile(OMP) or not os.access(OMP, os.X_OK):
+    def spawn_harness(self):
+        if (not HARNESS_CMD or not os.path.isfile(HARNESS_CMD)
+                or not os.access(HARNESS_CMD, os.X_OK)):
             try:
                 dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                         message_type=Gtk.MessageType.ERROR,
                                         buttons=Gtk.ButtonsType.OK,
-                                        text="omp not found",
-                                        secondary_text="Set MINI_IDE_OMP to a valid path "
-                                                       "or install omp in PATH.")
+                                        text="PanelIDE could not find its harness",
+                                        secondary_text="Set PANELIDE_HARNESS to an executable "
+                                                       "path. MINI_IDE_OMP remains supported.")
                 dlg.run()
                 dlg.destroy()
             except Exception:
                 pass
             return
-        self._spawn_async(self.omp_term, self.root, [OMP],
-                          lambda pid: setattr(self, "omp_pid", pid))
+        self._spawn_async(self.harness_term, self.root, [HARNESS_CMD],
+                          lambda pid: setattr(self, "harness_pid", pid))
 
     def on_term_selection(self, term):
         try:
@@ -878,7 +813,7 @@ class ProjectPanel(Gtk.Box):
         self._spawn_async(term, self.root, ["/bin/bash"])
         self.cmd_terms.append(term)
         lbl = Gtk.Label("T%d" % len(self.cmd_terms))
-        close = Gtk.Button(label="✕")
+        close = icon_button("close", "Close terminal")
         close.set_relief(Gtk.ReliefStyle.NONE)
         close.set_focus_on_click(False)
         close.connect("clicked", self.close_tab, term)
@@ -990,7 +925,7 @@ class ProjectPanel(Gtk.Box):
             dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                     message_type=Gtk.MessageType.WARNING,
                                     buttons=Gtk.ButtonsType.NONE,
-                                    text="%s changed outside Mini-IDE" % os.path.basename(doc.path),
+                                    text="%s changed outside PanelIDE" % os.path.basename(doc.path),
                                     secondary_text="You have unsaved edits. Autosave is "
                                                    "suspended until you decide.")
             dlg.add_button("Reload from disk", Gtk.ResponseType.YES)
@@ -1472,7 +1407,7 @@ class ProjectPanel(Gtk.Box):
 
     def make_tab(self, widget, fpath, content_widget):
         lbl = Gtk.Label(os.path.basename(fpath))
-        close = Gtk.Button(label="✕")
+        close = icon_button("close", "Close file")
         close.set_relief(Gtk.ReliefStyle.NONE)
         close.set_focus_on_click(False)
         close.connect("clicked", self.close_file_tab, fpath)
@@ -1694,9 +1629,11 @@ class ProjectPanel(Gtk.Box):
         scroll = Gtk.ScrolledWindow()
         scroll.add(tv)
         scroll.show_all()
-        btn_text = Gtk.Button(label="View text")
-        btn_text.connect("clicked", lambda w, p=fpath: self.text_from_table(p))
+        btn_text = icon_button(
+            "files", "View as text",
+            lambda w, p=fpath: self.text_from_table(p))
         bar = Gtk.Box(spacing=4)
+        bar.get_style_context().add_class("viewer-toolbar")
         bar.pack_start(btn_text, False, False, 4)
         if truncated:
             note = Gtk.Label(xalign=0)
@@ -1772,10 +1709,10 @@ class ProjectPanel(Gtk.Box):
         scroll.show_all()
         state = {"page": 0, "scale": 1.2, "doc": doc}
         lbl = Gtk.Label("")
-        btn_prev = Gtk.Button(label="◀")
-        btn_next = Gtk.Button(label="▶")
-        btn_zin = Gtk.Button(label="+")
-        btn_zout = Gtk.Button(label="−")
+        btn_prev = icon_button("previous", "Previous page")
+        btn_next = icon_button("next", "Next page")
+        btn_zin = icon_button("zoom-in", "Zoom in")
+        btn_zout = icon_button("zoom-out", "Zoom out")
 
         def render():
             p = state["doc"].get_page(state["page"])
@@ -1819,6 +1756,7 @@ class ProjectPanel(Gtk.Box):
         btn_zin.connect("clicked", zin)
         btn_zout.connect("clicked", zout)
         bar = Gtk.Box(spacing=4)
+        bar.get_style_context().add_class("viewer-toolbar")
         for b in (btn_prev, btn_next, btn_zin, btn_zout):
             bar.pack_start(b, False, False, 2)
         bar.pack_start(lbl, False, False, 8)
@@ -1842,9 +1780,9 @@ class ProjectPanel(Gtk.Box):
                 p.set_state(Gst.State.READY)
             except Exception:
                 pass
-        btn_play = Gtk.ToggleButton(label="Play")
-        btn_stop = Gtk.Button(label="Stop")
-        btn_mute = Gtk.ToggleButton(label="Mute")
+        btn_play = icon_button("play", "Play audio", toggle=True)
+        btn_stop = icon_button("stop", "Stop audio")
+        btn_mute = icon_button("volume", "Mute audio", toggle=True)
         scale = Gtk.Scale.new(Gtk.Orientation.HORIZONTAL, Gtk.Adjustment(0, 0, 1, 0.1, 1, 0))
         scale.set_size_request(-1, 24)
         lbl_time = Gtk.Label("00:00 / 00:00")
@@ -1862,7 +1800,10 @@ class ProjectPanel(Gtk.Box):
             lbl_time.set_text("00:00 / 00:00")
 
         def on_mute(b):
-            player.set_property("mute", b.get_active())
+            muted = b.get_active()
+            player.set_property("mute", muted)
+            set_button_icon(b, "mute" if muted else "volume")
+            b.set_tooltip_text("Unmute audio" if muted else "Mute audio")
 
         btn_play.connect("toggled", on_play)
         btn_stop.connect("clicked", on_stop)
@@ -1893,13 +1834,14 @@ class ProjectPanel(Gtk.Box):
             return True
         timer_id = GLib.timeout_add(400, update)
         bar = Gtk.Box(spacing=6)
+        bar.get_style_context().add_class("viewer-toolbar")
         bar.pack_start(btn_play, False, False, 2)
         bar.pack_start(btn_stop, False, False, 2)
         bar.pack_start(btn_mute, False, False, 2)
         bar.pack_start(scale, True, True, 4)
         bar.pack_start(lbl_time, False, False, 4)
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        vbox.pack_start(bar, False, False, 8)
+        vbox.pack_start(bar, False, False, 0)
         vbox.show_all()
         self.audio_state[vbox] = (player, timer_id, bus, handler_id)
         self.make_tab(vbox, fpath, vbox)
@@ -1979,8 +1921,8 @@ class ProjectPanel(Gtk.Box):
                 self.tree_box.hide()
                 GLib.idle_add(lambda: self._collapse_tree(pane))
                 if hasattr(self, "btn_tree"):
-                    self.btn_tree.set_label("Show files")
-                    self.btn_tree.set_tooltip_text("Show the file tree")
+                    set_button_icon(self.btn_tree, "files-hidden")
+                    self.btn_tree.set_tooltip_text("Show file tree")
             else:
                 self.tree_box.show_all()
                 if self.layout == "compact":
@@ -1989,8 +1931,8 @@ class ProjectPanel(Gtk.Box):
                     self.root_drop.hide()
                 GLib.idle_add(lambda: self._restore_tree(pane))
                 if hasattr(self, "btn_tree"):
-                    self.btn_tree.set_label("Hide files")
-                    self.btn_tree.set_tooltip_text("Hide the file tree")
+                    set_button_icon(self.btn_tree, "files")
+                    self.btn_tree.set_tooltip_text("Hide file tree")
         except Exception:
             pass
         if self.layout == "compact":
@@ -2025,12 +1967,12 @@ class ProjectPanel(Gtk.Box):
 
     def _apply_tabs_state(self):
         if self._tabs_collapsed:
-            self.btn_collapse.set_label("Show terminal")
-            self.btn_collapse.set_tooltip_text("Show terminal")
+            set_button_icon(self.btn_collapse, "terminal")
+            self.btn_collapse.set_tooltip_text("Show command terminals")
             GLib.idle_add(self._collapse_tabs)
         else:
-            self.btn_collapse.set_label("Hide terminal")
-            self.btn_collapse.set_tooltip_text("Hide terminal")
+            set_button_icon(self.btn_collapse, "panel-bottom")
+            self.btn_collapse.set_tooltip_text("Hide command terminals")
             GLib.idle_add(self._restore_tabs)
         if self.layout == "compact":
             self._apply_compact_bottom_visibility()
@@ -2283,7 +2225,7 @@ class ProjectPanel(Gtk.Box):
         return False
 
     def shutdown(self):
-        """Mata omp, terminales y audio del panel."""
+        """Stop the harness, command terminals, and audio in this panel."""
         if self._shutdown:
             return
         self._shutdown = True
@@ -2307,9 +2249,9 @@ class ProjectPanel(Gtk.Box):
             except Exception:
                 pass
         self.players.clear()
-        if self.omp_pid:
+        if self.harness_pid:
             try:
-                os.kill(self.omp_pid, 15)
+                os.kill(self.harness_pid, 15)
             except Exception:
                 pass
         for t in self.cmd_terms:
@@ -2318,7 +2260,7 @@ class ProjectPanel(Gtk.Box):
             except Exception:
                 pass
         try:
-            self.omp_term.kill_sync(Vte.TerminalKill.KILL_SHELL, None)
+            self.harness_term.kill_sync(Vte.TerminalKill.KILL_SHELL, None)
         except Exception:
             pass
 
@@ -2390,7 +2332,7 @@ def save_session(window):
         print("Could not save session:", ex)
 
 
-class MiniIDE(Gtk.Window):
+class PanelIDE(Gtk.Window):
     def __init__(self, root):
         super().__init__()
         if os.path.isfile(APP_ICON):
@@ -2398,7 +2340,7 @@ class MiniIDE(Gtk.Window):
                 self.set_icon_from_file(APP_ICON)
             except Exception:
                 pass
-        self.set_title(os.path.basename(root))
+        self.set_title("PanelIDE — %s" % os.path.basename(root))
         self.set_default_size(1360, 820)
         self.root = os.path.abspath(root)
         self.recents = load_recents()
@@ -2410,9 +2352,10 @@ class MiniIDE(Gtk.Window):
         self.mode = "normal"
 
         provider = Gtk.CssProvider()
-        provider.load_from_data(VSC_CSS)
+        provider.load_from_path(CSS_FILE)
         Gtk.StyleContext.add_provider_for_screen(self.get_screen(), provider,
                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self._css_provider = provider
 
         self.main_panel = ProjectPanel(self.root, "full")
         self.panels.append(self.main_panel)
@@ -2420,43 +2363,43 @@ class MiniIDE(Gtk.Window):
         self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.content.pack_start(self.main_panel, True, True, 0)
 
-        btn_openfolder = Gtk.Button(label="Open folder")
-        btn_openfolder.connect("clicked", self.open_folder_new_instance)
-        self.btn_add = Gtk.Button(label="+ Add project")
-        self.btn_add.set_tooltip_text("Add a project to the multitask view")
-        self.btn_add.connect("clicked", self.on_add_click)
+        btn_openfolder = icon_button(
+            "folder-open", "Open folder in a new window",
+            self.open_folder_new_instance)
+        self.btn_add = icon_button("plus", "Add project", self.on_add_click)
         self.btn_add.set_no_show_all(True)
         self.btn_add.hide()
-        self.btn_multitask = Gtk.Button(label="Multitask")
-        self.btn_multitask.set_tooltip_text("Toggle multitask view")
-        self.btn_multitask.connect("clicked", self.on_multitask_click)
+        self.btn_multitask = icon_button(
+            "multitask", "Enter multitask view", self.on_multitask_click)
         self.btn_multitask.set_no_show_all(True)
         self.btn_multitask.set_visible(True)
-        self.btn_session = Gtk.ToggleButton(
-            label="Session: ON" if self.session_enabled else "Session: OFF")
-        self.btn_session.set_active(self.session_enabled)
-        self.btn_session.set_tooltip_text("Restore open projects and files when Mini-IDE starts")
+        self.btn_session = icon_button(
+            "session", "Restore projects and files on startup", toggle=True)
         self.btn_session.get_style_context().add_class("session-toggle")
+        self.btn_session.set_active(self.session_enabled)
+        set_button_icon(
+            self.btn_session,
+            "session-on" if self.session_enabled else "session",
+            semantic=self.session_enabled)
+        self.btn_session.set_tooltip_text(
+            "Session restore is %s" % ("on" if self.session_enabled else "off"))
         self.btn_session.connect("toggled", self.on_session_toggle)
-        self.btn_tree = Gtk.Button(label="Hide files")
-        self.btn_tree.set_tooltip_text("Hide the file tree")
-        self.btn_tree.get_style_context().add_class("panel-toggle")
-        self.btn_tree.connect("clicked", self.on_global_tree_toggle)
+        self.btn_tree = icon_button(
+            "files", "Hide file tree", self.on_global_tree_toggle,
+            False, "panel-toggle")
         self.hb = Gtk.HeaderBar()
         self.hb.set_show_close_button(True)
-        self.hb.set_title(os.path.basename(self.root))
+        self.hb.set_title("PanelIDE — %s" % os.path.basename(self.root))
         self.hb.pack_start(btn_openfolder)
         self.hb.pack_start(self.btn_add)
         self.hb.pack_start(self.btn_multitask)
         self.hb.pack_start(self.btn_session)
         self.hb.pack_start(self.btn_tree)
         self.set_titlebar(self.hb)
-        # indicador runner modo normal (en multitask cada panel tiene el suyo)
-        self.runner_btn_hb = Gtk.Button()
-        self.runner_btn_hb.get_style_context().add_class("runner-btn")
-        self.runner_btn_hb.connect("clicked", self.on_hb_runner_toggle)
+        self.runner_btn_hb = icon_button(
+            "runner", "Runner status", self.on_hb_runner_toggle,
+            False, "runner-btn")
         self.hb.pack_start(self.runner_btn_hb)
-
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
         save_recents(self.root)
@@ -2466,9 +2409,14 @@ class MiniIDE(Gtk.Window):
         if self._restore_session_enabled and self.session_enabled and self.session["projects"]:
             GLib.idle_add(self.restore_session)
 
+
     def on_session_toggle(self, btn):
         self.session_enabled = btn.get_active()
-        btn.set_label("Session: ON" if self.session_enabled else "Session: OFF")
+        set_button_icon(
+            btn, "session-on" if self.session_enabled else "session",
+            semantic=self.session_enabled)
+        btn.set_tooltip_text(
+            "Session restore is %s" % ("on" if self.session_enabled else "off"))
         if self.session_enabled:
             save_session(self)
 
@@ -2481,11 +2429,11 @@ class MiniIDE(Gtk.Window):
         if self.main_panel is None:
             return
         if self.main_panel._tree_collapsed:
-            self.btn_tree.set_label("Show files")
-            self.btn_tree.set_tooltip_text("Show the file tree")
+            set_button_icon(self.btn_tree, "files-hidden")
+            self.btn_tree.set_tooltip_text("Show file tree")
         else:
-            self.btn_tree.set_label("Hide files")
-            self.btn_tree.set_tooltip_text("Hide the file tree")
+            set_button_icon(self.btn_tree, "files")
+            self.btn_tree.set_tooltip_text("Hide file tree")
 
     def restore_session(self):
         if not self._restore_session_enabled or not self.session_enabled:
@@ -2534,7 +2482,7 @@ class MiniIDE(Gtk.Window):
         for panel in list(self.panels):
             if not panel.request_close():
                 return True
-        if not self._runner_gate(list(self.panels), "Cerrar Mini-IDE"):
+        if not self._runner_gate(list(self.panels), "Cerrar PanelIDE"):
             return True
         save_session(self)
         return False
@@ -2565,26 +2513,28 @@ class MiniIDE(Gtk.Window):
         btn.show()
         panel = self.main_panel
         info = getattr(panel, "runner_info", None) or {}
-        st = getattr(panel, "runner_state", "unknown")
-        if st == "busy":
-            label, cls = "◐ RUNNER BUSY", "runner-busy"
-            tip = "%s: ejecutando un job." % info.get("repo", "?")
-        elif st == "wait":
-            label, cls = "… RUNNER …", "runner-wait"
-            tip = "Operación en curso…"
+        state = getattr(panel, "runner_state", "unknown")
+        if state == "busy":
+            icon, semantic = "runner-busy", True
+            cls = "runner-busy"
+            tip = "%s: executing a job." % info.get("repo", "?")
+        elif state == "wait":
+            icon, semantic = "runner-busy", True
+            cls = "runner-wait"
+            tip = "Runner operation in progress…"
         else:
-            _st, label, cls, tip = ide_runners.presentation(info)
+            resolved, cls, tip = ide_runners.presentation(info)
+            icon = {"on": "runner-on", "off": "runner-off"}.get(
+                resolved, "runner")
+            semantic = resolved in ("on", "off")
+        context = btn.get_style_context()
         for old in ("runner-on", "runner-off", "runner-busy",
                     "runner-none", "runner-wait"):
-            btn.get_style_context().remove_class(old)
-        btn.get_style_context().add_class(cls)
-        try:
-            _set_button_markup(
-                btn, "<b>%s</b>" % GLib.markup_escape_text(label))
-            btn.set_tooltip_text(tip + "\nClick para encender/apagar.")
-            btn.set_sensitive(True)
-        except Exception:
-            pass
+            context.remove_class(old)
+        context.add_class(cls)
+        set_button_icon(btn, icon, semantic=semantic)
+        btn.set_tooltip_text(tip + "\nClick to turn the runner on or off.")
+        btn.set_sensitive(True)
 
     def _runner_gate(self, panels, title):
         """Gate de cierre para runners activos. Misma rutina en todos
@@ -2793,7 +2743,8 @@ class MiniIDE(Gtk.Window):
         self.btn_tree.set_visible(False)
         self.main_panel.on_close = self.close_panel
         self.main_panel.set_layout("compact")
-        self.btn_multitask.set_label("Exit multitask")
+        set_button_icon(self.btn_multitask, "grid")
+        self.btn_multitask.set_tooltip_text("Exit multitask view")
         self.btn_add.set_visible(True)
         self.rebuild_layout()
         self._hb_runner_sync()
@@ -2808,7 +2759,7 @@ class MiniIDE(Gtk.Window):
                                     message_type=Gtk.MessageType.QUESTION,
                                     buttons=Gtk.ButtonsType.YES_NO,
                                     text="Exit multitask",
-                                    secondary_text="Will close: %s (and their omp). Continue?" % names)
+                                    secondary_text="Will close: %s (and their harnesses). Continue?" % names)
             resp = dlg.run()
             dlg.destroy()
             if resp != Gtk.ResponseType.YES:
@@ -2824,11 +2775,13 @@ class MiniIDE(Gtk.Window):
         self.mode = "normal"
         self.main_panel.set_layout("full")
         self.main_panel.on_close = None
-        self.btn_multitask.set_label("Multitask")
+        set_button_icon(self.btn_multitask, "multitask")
+        self.btn_multitask.set_tooltip_text("Enter multitask view")
         self.btn_add.set_visible(False)
         self.btn_tree.set_visible(True)
         self._sync_global_tree_button()
-        self.set_title(os.path.basename(self.main_panel.root))
+        self.set_title("PanelIDE — %s" % os.path.basename(self.main_panel.root))
+        self.hb.set_title("PanelIDE — %s" % os.path.basename(self.main_panel.root))
         for ch in list(self.content.get_children()):
             self.content.remove(ch)
         parent = self.main_panel.get_parent()
@@ -2901,7 +2854,7 @@ class MiniIDE(Gtk.Window):
         title.set_markup("<b>Close project</b>")
         title.set_justify(Gtk.Justification.CENTER)
         confirm.pack_start(title, False, False, 0)
-        detail = Gtk.Label("'%s' and its omp will be closed." % os.path.basename(panel.root))
+        detail = Gtk.Label("'%s' and its harness will be closed." % os.path.basename(panel.root))
         detail.set_line_wrap(True)
         detail.set_justify(Gtk.Justification.CENTER)
         confirm.pack_start(detail, False, False, 0)
@@ -2937,7 +2890,7 @@ class MiniIDE(Gtk.Window):
                                 message_type=Gtk.MessageType.WARNING,
                                 buttons=Gtk.ButtonsType.YES_NO,
                                 text="Close project",
-                                secondary_text="'%s' and its omp will be closed." % os.path.basename(panel.root))
+                                secondary_text="'%s' and its harness will be closed." % os.path.basename(panel.root))
         resp = dlg.run()
         dlg.destroy()
         return resp == Gtk.ResponseType.YES
@@ -2967,7 +2920,8 @@ class MiniIDE(Gtk.Window):
         self.btn_multitask.set_visible(bool(self.panels))
         if not self.panels:
             self._panel_views = {}
-            self.set_title("Mini-IDE — add a project")
+            self.set_title("PanelIDE — Add a project")
+            self.hb.set_title("PanelIDE — Add a project")
             box = self.make_empty_slot()
             self.content.pack_start(box, True, True, 0)
             self.content.show_all()
@@ -2981,10 +2935,14 @@ class MiniIDE(Gtk.Window):
         for p in self.panels:
             p._apply_editor_visibility()
         if self.mode == "multitask":
-            self.set_title("Multitask — %d project%s" % (
-                len(self.panels), "s" if len(self.panels) > 1 else ""))
+            title = "PanelIDE — Multitask — %d project%s" % (
+                len(self.panels), "s" if len(self.panels) > 1 else "")
         else:
-            self.set_title(os.path.basename(self.main_panel.root))
+            title = "PanelIDE — %s" % os.path.basename(self.main_panel.root)
+        self.set_title(title)
+        self.hb.set_title(title)
+        if self.mode != "multitask":
+            self._sync_global_tree_button()
         GLib.idle_add(self._mt_sizes)
         GLib.timeout_add(250, self._mt_sizes)
 
@@ -3008,13 +2966,23 @@ class MiniIDE(Gtk.Window):
 
     def _mt_sizes(self):
         try:
+            n = len(self.panels)
             for panel in self.panels:
                 if panel.layout == "compact":
                     panel._apply_compact_sizes()
+                # Keep title ellipsis in sync with column count so long
+                # names truncate instead of squeezing buttons.
+                try:
+                    if getattr(panel, "title_lbl", None) is not None:
+                        panel.title_lbl.set_max_width_chars(
+                            mt_ui.title_max_chars(n))
+                except Exception:
+                    pass
             for pane, left, total in self._mt_panes:
                 w = pane.get_allocated_width()
-                if w > 50:
-                    pane.set_position(int(w * left / total))
+                pos = mt_ui.split_position(w, left, total)
+                if pos is not None:
+                    pane.set_position(pos)
         except Exception:
             pass
         return False
@@ -3055,7 +3023,7 @@ class MiniIDE(Gtk.Window):
                     return False
                 panel = self._panel_for(focused) or self.main_panel
                 if panel is not None:
-                    panel.term_paste(panel.omp_term)
+                    panel.term_paste(panel.harness_term)
                     return True
                 return False
             if self.mode == "multitask" and k in tuple("123456789"):
@@ -3087,7 +3055,7 @@ if __name__ == "__main__":
         dlg.destroy()
     if not folder:
         sys.exit(0)
-    win = MiniIDE(folder)
+    win = PanelIDE(folder)
     win.connect("delete-event", win.on_delete_event)
     win.connect("destroy", win.on_destroy)
     win.show_all()
