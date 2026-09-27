@@ -9,7 +9,7 @@ run opencode**. Usage: ~83 MB.
 (multiple instances can be opened — each folder in its own window).
 
 ## Shortcuts and usage
-- Double-click file → opens (image, PDF, audio, colored CSV or text depending on type)
+- Double-click file → opens images in the built-in preview, PDFs in the viewer, audio in the player, CSV/TSV as colored tables, or other text in GtkSource
 - Double-click folder → expand/collapse
 - `F2` → rename file/folder
 - `Del` → delete (with confirmation)

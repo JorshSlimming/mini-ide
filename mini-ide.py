@@ -1300,7 +1300,7 @@ class ProjectPanel(Gtk.Box):
 
     def on_drop(self, tree, ctx, x, y, data, info, time):
         if info == 81:
-            src = data.get_text() if data else None
+            src = os.fsdecode(bytes(data.get_data())) if data else None
             dest = self._tree_drop_destination(tree, x, y)
             if src and dest:
                 self.move_path(src, dest)
@@ -1342,7 +1342,7 @@ class ProjectPanel(Gtk.Box):
         if sel[1]:
             path = self.store.get_value(sel[1], 2)
             if path and self.path_inside_root(path):
-                data.set_text(path, -1)
+                data.set(data.get_target(), 8, list(os.fsencode(path)))
 
     def _tree_drop_destination(self, tree, x, y):
         info = tree.get_path_at_pos(int(x), int(y))
@@ -1719,8 +1719,8 @@ class ProjectPanel(Gtk.Box):
             return
         try:
             info = GdkPixbuf.Pixbuf.get_file_info(fpath)
-            w0 = info[0] if info else 0
-            h0 = info[1] if info else 0
+            w0 = info[1] if info else 0
+            h0 = info[2] if info else 0
             if w0 and h0 and w0 * h0 > 100_000_000:
                 dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                         message_type=Gtk.MessageType.WARNING,

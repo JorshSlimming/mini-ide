@@ -31,8 +31,8 @@ Multiple instances can be opened (each folder in its own window).
 ## Features
 
 - File browser with auto-refresh (GFileMonitor): files created by opencode or the terminal appear automatically, also in subfolders
-- Double-click opens by type: image, PDF, audio, colored CSV or text (GtkSource with syntax highlighting)
-- Editor with tabs, autosave (0.8 s), `Ctrl+S` to save
+- Double-click opens images in the built-in preview, PDFs in the viewer, audio in the player, CSV/TSV as colored tables, and other text in GtkSource with syntax highlighting
+- Editor tabs, autosave after 0.8 s, and `Ctrl+S` to save
 - Command terminals with T1/T2 tabs (`Ctrl+T` or `+` button), collapsible with the ▾ arrow; selecting text = automatic copy (VS Code style)
 - **Session restore**: the `Session: ON/OFF` toggle saves open projects, files, terminal count and panel visibility, restoring them on the next launch
 - **opencode** terminal embedded in the project; right-click menu with Copy/Paste and the Shift hint for selection
