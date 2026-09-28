@@ -2,3 +2,6 @@ ui-review/
 __pycache__/
 *.pyc
 .pytest_cache/
+/panelide-visual-audit*.zip
+/PanelIDE-visual-audit*.zip
+/panelide-final-check.zip

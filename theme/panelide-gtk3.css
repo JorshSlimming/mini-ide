@@ -1,0 +1,371 @@
+/* PanelIDE — Graphite + Teal — GTK3 starter theme
+   Target: Debian 13 / GTK3. Keep file-type icons from Material Icon Theme.
+
+   Button families:
+   A. chrome (header/panel/viewer controls): transparent idle, quiet hover.
+   B. regular button (dialogs/empty states): #1B2226 idle, #334047 border.
+   C. semantic/status (runner/session/destructive): state colors only.
+*/
+window,
+paned,
+scrolledwindow,
+notebook {
+  background-color: #0F1418;
+  color: #D9E0E5;
+}
+
+box {
+  color: #D9E0E5;
+}
+
+headerbar box {
+  background-color: transparent;
+  background-image: none;
+}
+
+headerbar {
+  background-color: #151B1F;
+  background-image: none;
+  border-bottom: 1px solid #26343A;
+  min-height: 36px;
+  padding: 2px 5px;
+}
+headerbar:backdrop { background-color: #13181C; }
+headerbar .title { color: #E9EFF2; font-weight: 600; }
+headerbar .subtitle { color: #697780; }
+headerbar button,
+button.chrome,
+button.icon-btn,
+button.panel-toggle,
+.viewer-toolbar button,
+box.terminal-actions button,
+notebook tab button {
+  background: transparent;
+  background-image: none;
+  color: #AAB4BE;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 2px 7px;
+  box-shadow: none;
+  text-shadow: none;
+  outline: none;
+  -gtk-outline-radius: 6px;
+}
+headerbar button:hover,
+button.chrome:hover,
+button.icon-btn:hover,
+button.panel-toggle:hover,
+.viewer-toolbar button:hover,
+box.terminal-actions button:hover,
+notebook tab button:hover {
+  background-color: #223138;
+  background-image: none;
+  border-color: #334047;
+  color: #D9E0E5;
+  box-shadow: none;
+  text-shadow: none;
+}
+headerbar button:active,
+button.chrome:active,
+button.icon-btn:active,
+button.panel-toggle:active,
+.viewer-toolbar button:active,
+box.terminal-actions button:active {
+  background-color: #163D3C;
+  background-image: none;
+  border-color: #00A995;
+  box-shadow: none;
+  text-shadow: none;
+}
+/* Native window controls: same chrome, subtle destructive close on hover. */
+headerbar button.titlebutton,
+headerbar button.titlebutton.minimize,
+headerbar button.titlebutton.maximize,
+headerbar button.titlebutton.close {
+  background-color: transparent;
+  background-image: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-shadow: none;
+  text-shadow: none;
+  outline: none;
+  color: #AAB4BE;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+headerbar button.titlebutton:hover {
+  background-color: #223138;
+  background-image: none;
+  border-color: #334047;
+  color: #D9E0E5;
+  box-shadow: none;
+}
+headerbar button.titlebutton:active {
+  background-color: #163D3C;
+  background-image: none;
+  border-color: #00A995;
+  box-shadow: none;
+}
+headerbar button.titlebutton.close:hover {
+  background-color: #352020;
+  background-image: none;
+  border-color: #674040;
+  color: #FFE0E0;
+}
+button.session-toggle:checked {
+  background-color: #123D39;
+  background-image: none;
+  border-color: #00A995;
+  color: #8CF3E3;
+  box-shadow: none;
+  text-shadow: none;
+}
+button.session-toggle:checked label { color: #8CF3E3; }
+
+/* Tree */
+treeview {
+  background-color: #151B1F;
+  color: #C8D0D5;
+  border: none;
+}
+treeview:hover { background-color: #1B252A; }
+treeview:selected {
+  background-color: #163D3C;
+  color: #EAFDFC;
+}
+box.tree-toolbar {
+  background-color: #151B1F;
+  border-bottom: 1px solid #26343A;
+  padding: 4px 5px;
+}
+box.tree-path { padding: 1px 0 2px 0; }
+box.tree-actions { padding-top: 2px; }
+
+/* Tabs: mostly borderless; accent line carries selection. */
+notebook { background-color: #0F1418; }
+notebook header {
+  background-color: #151B1F;
+  background-image: none;
+  border: none;
+  border-bottom: 1px solid #26343A;
+  min-height: 32px;
+}
+notebook tab {
+  background: transparent;
+  min-height: 32px;
+  padding: 3px 11px;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+notebook tab label { color: #81909A; }
+notebook tab:hover { background-color: #1B252A; }
+notebook tab:active,
+notebook tab:checked {
+  background-color: #11181C;
+  border-bottom: 2px solid #00D1B2;
+}
+notebook tab:active label,
+notebook tab:checked label { color: #E3EAEE; }
+notebook tab button {
+  background: transparent;
+  border: none;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+}
+notebook tab button:hover { background-color: #223138; }
+
+/* Panes: thin, quiet separators. */
+paned > separator {
+  background-color: #26343A;
+  min-width: 1px;
+  min-height: 1px;
+}
+
+/* Project strip for multitask. */
+.project-bar {
+  background-color: #151B1F;
+  background-image: none;
+  border-bottom: 1px solid #26343A;
+  min-height: 30px;
+  padding: 1px 5px;
+}
+.project-bar label.project-name {
+  color: #E9EFF2;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* B. Regular button: dialogs, empty states, isolated actions. */
+button {
+  color: #C8D0D5;
+  background-color: #1B2226;
+  background-image: none;
+  border: 1px solid #334047;
+  border-radius: 6px;
+  min-height: 28px;
+  padding: 2px 8px;
+  box-shadow: none;
+  text-shadow: none;
+  outline: none;
+  -gtk-outline-radius: 6px;
+}
+button:hover {
+  background-color: #223138;
+  background-image: none;
+  border-color: #334047;
+  color: #D9E0E5;
+  box-shadow: none;
+  text-shadow: none;
+}
+button:active {
+  background-color: #163D3C;
+  background-image: none;
+  border-color: #00A995;
+  box-shadow: none;
+  text-shadow: none;
+}
+button:focus,
+entry:focus,
+combobox button:focus {
+  border-color: #00A995;
+  outline: none;
+  box-shadow: none;
+}
+button:disabled,
+button:disabled label {
+  color: #697780;
+}
+entry,
+combobox button.combo {
+  background-color: #151B1F;
+  background-image: none;
+  color: #D9E0E5;
+  border: 1px solid #334047;
+  border-radius: 6px;
+  box-shadow: none;
+  text-shadow: none;
+  outline: none;
+}
+.dim-label { color: #697780; }
+.secondary-label { color: #91A0AA; }
+label { color: #C8D0D5; }
+
+/* Terminal / viewer support classes */
+box.terminal-actions button { min-width: 28px; min-height: 28px; padding: 1px; }
+.viewer-toolbar {
+  background-color: #151B1F;
+  border-bottom: 1px solid #26343A;
+  padding: 3px 5px;
+}
+.root-drop {
+  border: 1px dashed #334047;
+  background-color: #151B1F;
+  padding: 10px;
+  border-radius: 6px;
+  margin: 3px 4px;
+}
+.root-drop label { color: #91A0AA; }
+.root-drop:hover {
+  border-color: #00A995;
+  background-color: #163D3C;
+}
+.root-drop:hover label { color: #D9E0E5; }
+
+/* Runner semantics: reserve color for state, not general chrome. */
+button.runner-btn { font-weight: 600; }
+button.runner-on   { color: #72E59B; border-color: #2A6F49; background-color: #16271D; }
+button.runner-off  { color: #F58C8C; border-color: #6E3535; background-color: #281818; }
+button.runner-busy { color: #F0C267; border-color: #755B28; background-color: #2A2418; }
+button.runner-wait { color: #7DD3FC; border-color: #2C6279; background-color: #14242C; }
+button.runner-none { color: #697780; border-color: transparent; background-color: transparent; }
+button.runner-on label { color: #72E59B; }
+button.runner-off label { color: #F58C8C; }
+button.runner-busy label { color: #F0C267; }
+button.runner-wait label { color: #7DD3FC; }
+button.runner-none label { color: #9AA8B1; }
+/* Focus and media controls. */
+box.project-confirm {
+  background-color: #1B2226;
+  background-image: none;
+  border: 1px solid #00A995;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: none;
+}
+box.project-confirm label { color: #D9E0E5; }
+eventbox.project-modal-backdrop { background-color: rgba(4, 7, 9, 0.76); }
+/* Quiet scrollbars: PanelIDE trough, compact usable slider. */
+scrollbar trough {
+  background-color: transparent;
+  background-image: none;
+  border: none;
+}
+scrollbar slider {
+  background-color: #334047;
+  background-image: none;
+  border: none;
+  border-radius: 4px;
+  min-width: 8px;
+  min-height: 24px;
+}
+scrollbar slider:hover { background-color: #46565F; }
+scrollbar button {
+  background: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  color: #697780;
+}
+scale trough {
+  background-color: #26343A;
+  background-image: none;
+  border-radius: 3px;
+  min-height: 6px;
+}
+scale highlight { background-color: #00A995; background-image: none; }
+scale slider {
+  background-color: #D9E0E5;
+  background-image: none;
+  border: 1px solid #00A995;
+  border-radius: 8px;
+  min-width: 12px;
+  min-height: 12px;
+  box-shadow: none;
+}
+/* Labeled chrome stays compact; status controls use semantic color. */
+button.chrome label { font-size: 11px; }
+button.chrome.image-button image { margin-right: 4px; }
+button.runner-btn {
+  font-weight: 600;
+  border-radius: 9px;
+  padding: 2px 10px;
+  min-height: 28px;
+}
+button.runner-compact {
+  font-size: 10px;
+  padding: 1px 6px;
+  min-height: 26px;
+}
+button.runner-compact label { font-size: 10px; }
+button.runner-none {
+  color: #9AA8B1;
+  border-color: #46535C;
+  background-color: #20272B;
+}
+button.destructive-action {
+  color: #E6A0A0;
+  background-color: transparent;
+  border-color: transparent;
+}
+button.destructive-action label { color: #E6A0A0; }
+button.destructive-action:hover {
+  color: #FFE0E0;
+  background-color: #352020;
+  border-color: #674040;
+}
+button.destructive-action:hover label { color: #FFE0E0; }
