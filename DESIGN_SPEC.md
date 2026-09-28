@@ -51,7 +51,7 @@ Image, PDF, CSV and audio should share the same visual grammar: one tab strip, o
 
 ## Compact multitask
 
-With 2+ projects, compress project chrome. With 3+ projects, prefer icon-only controls with tooltips. Project names remain text; repeated actions should not.
+- With 2+ projects, compress project chrome without hiding PanelIDE-specific meanings: keep icon + compact labels for Files and Terminal, and show the runner's short text state. Universal actions may remain icon-only. Project names remain visible; use ellipsizing only when space requires it.
 
 ## Accessibility notes
 

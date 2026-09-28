@@ -2,7 +2,7 @@
 
 ## What it is
 
-PanelIDE is a GTK3 project browser/editor and terminal workspace. Its project UI is independent of the executable hosted in the embedded **Harness** terminal. The shell uses a dark Graphite + Teal theme, compact icon-first controls, and a separate GtkSource color scheme. File/folder icons continue to come from Material Icon Theme when available.
+PanelIDE is a GTK3 project browser/editor and terminal workspace. Its project UI is independent of the executable hosted in the embedded **Harness** terminal. The shell uses a dark Graphite + Teal theme, keeps universal actions icon-only, labels PanelIDE-specific controls, and shows runner state with semantic color and text. File/folder icons continue to come from Material Icon Theme when available.
 
 Launch from a checkout with `python3 panelide.py /path/to/project`, or use `panelide /path/to/project` after installing. See `README.md` for dependencies, configuration variables, and legacy-state migration.
 
@@ -14,6 +14,7 @@ Launch from a checkout with `python3 panelide.py /path/to/project`, or use `pane
 - Multitask view maintains independent project panels and can restore projects, open files, terminal counts, and collapsed-panel state.
 - Runner controls inspect/manage configured GitHub Actions self-hosted runners; they are separate from the generic Harness terminal.
 - `PANELIDE_HARNESS` selects the embedded executable. The old `MINI_IDE_OMP` setting and `omp` default remain for migration compatibility.
+- The main header labels Open folder, Multitask, Session, and Files. Multitask project bars label Files and Terminal and keep runner state visible in a compact status badge.
 
 ## Possible future work
 

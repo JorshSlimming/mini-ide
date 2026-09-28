@@ -194,3 +194,33 @@ scale slider {
   min-width: 12px;
   min-height: 12px;
 }
+/* Labeled chrome stays compact; status controls use semantic color. */
+button.chrome label { font-size: 11px; }
+button.chrome.image-button image { margin-right: 4px; }
+button.runner-btn {
+  font-weight: 600;
+  border-radius: 9px;
+  padding: 2px 10px;
+  min-height: 28px;
+}
+button.runner-compact {
+  font-size: 10px;
+  padding: 1px 6px;
+  min-height: 26px;
+}
+button.runner-compact label { font-size: 10px; }
+button.runner-none {
+  color: #9AA8B1;
+  border-color: #46535C;
+  background-color: #20272B;
+}
+button.destructive-action {
+  color: #E6A0A0;
+  background-color: transparent;
+  border-color: transparent;
+}
+button.destructive-action:hover {
+  color: #FFE0E0;
+  background-color: #352020;
+  border-color: #674040;
+}

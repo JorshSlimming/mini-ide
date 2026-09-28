@@ -3,28 +3,60 @@ import mini_ide.runners as R
 from mini_ide import multitask_ui as MT
 
 
-def test_runner_missing_uses_quiet_state_and_repo_tooltip():
-    state, css_class, tip = R.presentation(
+def test_runner_missing_has_explicit_no_runner_presentation():
+    state, label, css_class, tip = R.presentation(
         {"has_runner": False, "root": "/x/projects-bot"})
-    assert state == "none"
-    assert css_class == "runner-none"
+    assert (state, label, css_class) == (
+        "none", "— NO RUNNER", "runner-none")
     assert "projects-bot" in tip
 
 
-def test_runner_status_maps_to_semantic_states():
+def test_runner_status_has_consistent_full_presentation():
     info = {"has_runner": True, "unit": "u", "repo": "r"}
-    state, css_class, tip = R.presentation(info, local="active")
-    assert (state, css_class) == ("on", "runner-on")
+    state, label, css_class, tip = R.presentation(info, local="active")
+    assert (state, label, css_class) == (
+        "on", "● RUNNER ON", "runner-on")
     assert "r\nu" in tip
-    state, css_class, tip = R.presentation(info, local="inactive")
-    assert (state, css_class) == ("off", "runner-off")
-    assert "APAGADO" in tip
+    assert "Click to turn off." in tip
+
+    state, label, css_class, tip = R.presentation(info, local="inactive")
+    assert (state, label, css_class) == (
+        "off", "○ RUNNER OFF", "runner-off")
+    assert "Click to turn on." in tip
+
+
+def test_runner_busy_and_wait_keep_semantic_labels():
+    info = {"has_runner": True, "repo": "r"}
+    busy = R.presentation(info, state="busy")
+    waiting = R.presentation(info, state="wait")
+    assert busy[:3] == ("busy", "◐ RUNNER BUSY", "runner-busy")
+    assert waiting[:3] == ("wait", "… RUNNER …", "runner-wait")
+
+
+def test_runner_presentation_compact_labels():
+    info = {"has_runner": True, "repo": "r"}
+    expected = (
+        ("on", "● ON", "runner-on"),
+        ("off", "○ OFF", "runner-off"),
+        ("busy", "◐ BUSY", "runner-busy"),
+        ("wait", "… WAIT", "runner-wait"),
+        ("none", "— NONE", "runner-none"),
+    )
+    for state, label, css_class in expected:
+        presented = R.presentation(
+            info, state=state, compact=True)
+        assert presented[:3] == (state, label, css_class)
+
+    missing = R.presentation(
+        {"has_runner": False, "root": "/tmp/project"}, compact=True)
+    assert missing[:3] == ("none", "— NONE", "runner-none")
 
 
 def test_title_max_chars():
     assert MT.title_max_chars(1) == 40
-    assert MT.title_max_chars(2) == 30
-    assert MT.title_max_chars(3) == 24
+    # Narrow columns: titles yield space before project-bar buttons do.
+    assert MT.title_max_chars(2) == 12
+    assert MT.title_max_chars(3) == 8
     assert MT.title_max_chars(5) == 18
     assert MT.title_max_chars("bogus") == 24
 

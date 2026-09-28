@@ -197,24 +197,53 @@ def wait_not_busy(org, repo, agent, poll=10.0, cancelled=None):
         time.sleep(poll)
 
 
-def presentation(info, local=None):
-    """(state, CSS class, tooltip) for a runner status icon.
+def presentation(info, local=None, state=None, compact=False):
+    """Return state, visible label, CSS class, and tooltip for a runner.
 
-    Solo estado local (sin red). busy/wait los pone la capa UI encima.
+    Local state is read without network access. The UI may pass a resolved
+    state such as ``busy`` or ``wait`` when it has fresher information.
     """
     info = info or {}
     if not info.get("has_runner"):
-        base = os.path.basename(info.get("root", "?"))
-        return ("none", "runner-none",
-                "«%s» no tiene runner configurado.\n"
-                "Corre ./config.sh en una carpeta actions-runner-* "
-                "y luego `runners rescan`." % base)
-    unit = info.get("unit", "")
-    repo = info.get("repo", "?")
-    if local is None:
-        local = local_state(unit)
-    if local == "active":
-        return ("on", "runner-on",
-                "%s\n%s\nClick para APAGAR." % (repo, unit))
-    tip = "%s\n%s\nAPAGADO: click para ENCENDER." % (repo, unit)
-    return ("off", "runner-off", tip)
+        state = "none"
+    elif state is None:
+        if local is None:
+            local = local_state(info.get("unit", ""))
+        if local == "active":
+            state = "on"
+        elif local in ("inactive", "failed"):
+            state = "off"
+        else:
+            state = "wait"
+
+    labels = {
+        "on": ("● RUNNER ON", "● ON", "runner-on"),
+        "off": ("○ RUNNER OFF", "○ OFF", "runner-off"),
+        "busy": ("◐ RUNNER BUSY", "◐ BUSY", "runner-busy"),
+        "wait": ("… RUNNER …", "… WAIT", "runner-wait"),
+        "none": ("— NO RUNNER", "— NONE", "runner-none"),
+    }
+    if state not in labels:
+        state = "wait"
+
+    if state == "none":
+        root = os.path.basename(info.get("root") or "?")
+        tooltip = ("%s has no configured runner.\n"
+                   "Run ./config.sh from an actions-runner-* folder, "
+                   "then run `runners rescan`." % root)
+    elif state == "on":
+        tooltip = "%s\n%s\nClick to turn off." % (
+            info.get("repo", "?"), info.get("unit", "?"))
+    elif state == "off":
+        tooltip = "%s\n%s\nClick to turn on." % (
+            info.get("repo", "?"), info.get("unit", "?"))
+    elif state == "busy":
+        tooltip = ("%s: executing a job.\n"
+                   "Click to stop it (confirmation required)."
+                   % info.get("repo", "?"))
+    else:
+        tooltip = "Runner status is being checked or an operation is in progress."
+
+    full_label, compact_label, css_class = labels[state]
+    return (state, compact_label if compact else full_label,
+            css_class, tooltip)

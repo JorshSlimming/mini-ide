@@ -7,11 +7,21 @@ multitask layout can be verified without a display.
 
 # Max chars for the centered project title per column count. The GTK label
 # must ellipsize (END) instead of overlapping buttons.
-_TITLE_MAX = {1: 40, 2: 30, 3: 24}
+_TITLE_MAX = {1: 40, 2: 12, 3: 8}
 
 # Minimum reasonable width per multitask column (px). Below this the
 # terminal prompt starts wrapping and buttons truncate.
 PANEL_MIN_PX = 300
+
+# Minimum usable editor width inside a multitask column (px). VTE keeps its
+# own natural width, so Gtk must be allowed to overflow a too-narrow column
+# rather than squeeze the editor into unreadable one-character wrapping.
+PANEL_EDITOR_MIN_PX = 260
+
+# Fixed GTK shrink budget for the two-pane project content (px). The editor
+# and harness each need a usable minimum inside a 1600px window, so keep
+# side-by-side columns from degenerating into wrapped one-character strips.
+PANEL_TOP_MIN_PX = 170
 
 
 def title_max_chars(n_projects):
