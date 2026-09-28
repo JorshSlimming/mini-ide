@@ -90,6 +90,16 @@ def test_compact_bottom_visible_needs_both_collapsed():
     assert MT.compact_bottom_visible(True, True) is False
 
 
+def test_compact_bottom_position_tracks_collapses_and_saved_split():
+    assert MT.compact_bottom_position(800, False, False) == 280
+    assert MT.compact_bottom_position(800, False, False, 314) == 314
+    assert MT.compact_bottom_position(800, True, False, 314) == 0
+    assert MT.compact_bottom_position(800, False, True, 314) == 800
+    assert MT.compact_bottom_position(800, True, True, 314) is None
+    assert MT.compact_bottom_position(40, False, False, 20) is None
+    assert MT.compact_bottom_position(800, False, False, 900) == 280
+
+
 def test_compact_main_position_keeps_single_panel():
     assert MT.compact_main_position(1000, False, False) == 580
     assert MT.compact_main_position(1000, True, False) == 580

@@ -52,6 +52,7 @@ Image, PDF, CSV and audio should share the same visual grammar: one tab strip, o
 ## Compact multitask
 
 - With 2+ projects, compress project chrome without hiding PanelIDE-specific meanings: keep icon + compact labels for Files and Terminal, and show the runner's short text state. Universal actions may remain icon-only. Project names remain visible; use ellipsizing only when space requires it.
+- Files and Terminal collapse independently; the visible pane fills the bottom strip. Restoring both returns the saved divider position.
 - Visual rule: universal action → icon-only is OK. PanelIDE-specific action → icon + label. Important state → color + explicit text.
 
 ## Accessibility notes

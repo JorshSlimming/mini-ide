@@ -79,6 +79,33 @@ def compact_bottom_visible(tree_collapsed, tabs_collapsed):
     return not (bool(tree_collapsed) and bool(tabs_collapsed))
 
 
+def compact_bottom_position(total_width, tree_collapsed, tabs_collapsed,
+                            expanded_position=None):
+    """Return the Files/Terminal divider position for compact mode.
+
+    A collapsed child must not retain a slice of the shared bottom strip.
+    When both children are visible, prefer their saved divider and otherwise
+    use the default Files width.
+    """
+    try:
+        width = int(total_width)
+    except (TypeError, ValueError):
+        return None
+    if width <= 50 or (bool(tree_collapsed) and bool(tabs_collapsed)):
+        return None
+    if bool(tree_collapsed):
+        return 0
+    if bool(tabs_collapsed):
+        return width
+    try:
+        position = int(expanded_position)
+    except (TypeError, ValueError):
+        position = None
+    if position is not None and 0 < position < width:
+        return position
+    return int(width * 0.35)
+
+
 def compact_main_position(total_height, tree_collapsed, tabs_collapsed):
     """Vertical split for the compact top/bottom panes.
 

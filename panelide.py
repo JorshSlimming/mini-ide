@@ -658,9 +658,14 @@ class ProjectPanel(Gtk.Box):
         try:
             w = self.bottom_h.get_allocated_width()
             h = self.main_v.get_allocated_height()
-            if w > 50 and mt_ui.compact_bottom_visible(
-                    self._tree_collapsed, self._tabs_collapsed):
-                self.bottom_h.set_position(int(w * 0.35))
+            saved_position = (self._tree_positions["compact"]
+                              if self._tree_positions["compact"] is not None
+                              else self._tabs_positions["compact"])
+            position = mt_ui.compact_bottom_position(
+                w, self._tree_collapsed, self._tabs_collapsed,
+                saved_position)
+            if position is not None:
+                self.bottom_h.set_position(position)
             if h > 50:
                 pos = mt_ui.compact_main_position(
                     h, self._tree_collapsed, self._tabs_collapsed)
@@ -1971,9 +1976,20 @@ class ProjectPanel(Gtk.Box):
         except Exception:
             pass
 
+    def _remember_compact_bottom_position(self, pane):
+        if self._tree_collapsed or self._tabs_collapsed:
+            return
+        position = pane.get_position()
+        width = pane.get_allocated_width()
+        if 0 < position < width:
+            self._tree_positions["compact"] = position
+            self._tabs_positions["compact"] = position
+
     def toggle_tree(self, btn=None):
         pane = self.bottom_h if self.layout == "compact" else self.main_h
-        if not self._tree_collapsed:
+        if self.layout == "compact":
+            self._remember_compact_bottom_position(pane)
+        elif not self._tree_collapsed:
             position = pane.get_position()
             if position > 0:
                 self._tree_positions[self.layout] = position
@@ -2028,11 +2044,13 @@ class ProjectPanel(Gtk.Box):
 
     def toggle_tabs(self, btn=None):
         pane = self.bottom_h if self.layout == "compact" else self.right_v
-        self._tabs_collapsed = not self._tabs_collapsed
-        if self._tabs_collapsed:
+        if self.layout == "compact":
+            self._remember_compact_bottom_position(pane)
+        elif not self._tabs_collapsed:
             position = pane.get_position()
             if position > 0:
                 self._tabs_positions[self.layout] = position
+        self._tabs_collapsed = not self._tabs_collapsed
         self._apply_tabs_state()
 
     def _apply_tabs_state(self):
