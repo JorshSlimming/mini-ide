@@ -288,8 +288,8 @@ class ProjectPanel(Gtk.Box):
         self.path_lbl.set_max_width_chars(18)
         self.path_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         self.path_lbl.set_tooltip_text(self.root)
-        self.path_lbl.set_markup("<span size='small' color='#888888'>%s</span>"
-                                 % GLib.markup_escape_text(self.root))
+        self.path_lbl.get_style_context().add_class("secondary-label")
+        self.path_lbl.set_text(self.root)
         btn_copy = icon_button("copy", "Copy folder path", self.copy_path)
         btn_open = icon_button(
             "folder-open", "Open folder in file manager", self.open_in_fm)
@@ -313,8 +313,7 @@ class ProjectPanel(Gtk.Box):
         ico = load_icon("folder") or load_icon("folder-open")
         if ico:
             self.root_drop.pack_start(Gtk.Image.new_from_pixbuf(ico), False, False, 0)
-        drop_lbl = Gtk.Label(xalign=0)
-        drop_lbl.set_markup("<b>Drop here to copy to root</b>")
+        drop_lbl = Gtk.Label(label="Drop here to copy to root", xalign=0)
         self.root_drop.pack_start(drop_lbl, False, False, 0)
         self.root_drop.drag_dest_set(Gtk.DestDefaults.ALL,
                                      [Gtk.TargetEntry.new("text/uri-list", 0, 80)],
@@ -659,13 +658,14 @@ class ProjectPanel(Gtk.Box):
         try:
             w = self.bottom_h.get_allocated_width()
             h = self.main_v.get_allocated_height()
-            if w > 50 and not (self._tree_collapsed or self._tabs_collapsed):
+            if w > 50 and mt_ui.compact_bottom_visible(
+                    self._tree_collapsed, self._tabs_collapsed):
                 self.bottom_h.set_position(int(w * 0.35))
             if h > 50:
-                if self._tree_collapsed or self._tabs_collapsed:
-                    self.main_v.set_position(h)
-                else:
-                    self.main_v.set_position(int(h * 0.58))
+                pos = mt_ui.compact_main_position(
+                    h, self._tree_collapsed, self._tabs_collapsed)
+                if pos is not None:
+                    self.main_v.set_position(pos)
             if w > 50 and h > 50:
                 self._compact_needs_size = False
         except Exception:
@@ -674,10 +674,11 @@ class ProjectPanel(Gtk.Box):
     def _apply_compact_bottom_visibility(self):
         if self.layout != "compact":
             return
-        if self._tree_collapsed or self._tabs_collapsed:
-            self.bottom_h.hide()
-        else:
+        if mt_ui.compact_bottom_visible(
+                self._tree_collapsed, self._tabs_collapsed):
             self.bottom_h.show()
+        else:
+            self.bottom_h.hide()
         GLib.idle_add(self._apply_compact_sizes)
 
     # ---------------- editor/terminal visibility ----------------
@@ -1666,14 +1667,15 @@ class ProjectPanel(Gtk.Box):
         scroll.add(tv)
         scroll.show_all()
         btn_text = icon_button(
-            "files", "View as text",
-            lambda w, p=fpath: self.text_from_table(p))
+            "files", "View CSV as text",
+            lambda w, p=fpath: self.text_from_table(p),
+            label="Text")
         bar = Gtk.Box(spacing=4)
         bar.get_style_context().add_class("viewer-toolbar")
         bar.pack_start(btn_text, False, False, 4)
         if truncated:
-            note = Gtk.Label(xalign=0)
-            note.set_markup("<span size='small' color='#888888'>Showing first 20,000 rows</span>")
+            note = Gtk.Label(label="Showing first 20,000 rows", xalign=0)
+            note.get_style_context().add_class("secondary-label")
             bar.pack_start(note, False, False, 4)
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         vbox.pack_start(bar, False, False, 2)
@@ -1722,8 +1724,10 @@ class ProjectPanel(Gtk.Box):
             print("Image error:", ex)
             return self.open_text(fpath)
         img = Gtk.Image.new_from_pixbuf(pb)
+        img.set_halign(Gtk.Align.CENTER)
+        img.set_valign(Gtk.Align.CENTER)
         scroll = Gtk.ScrolledWindow()
-        scroll.add(img)
+        scroll.add_with_viewport(img)
         scroll.show_all()
         self.make_tab(scroll, fpath, scroll)
 
@@ -1824,8 +1828,12 @@ class ProjectPanel(Gtk.Box):
         btn_stop = icon_button("stop", "Stop audio")
         btn_mute = icon_button("volume", "Mute audio", toggle=True)
         scale = Gtk.Scale.new(Gtk.Orientation.HORIZONTAL, Gtk.Adjustment(0, 0, 1, 0.1, 1, 0))
-        scale.set_size_request(-1, 24)
+        scale.set_draw_value(False)
+        scale.set_size_request(320, 24)
         lbl_time = Gtk.Label("00:00 / 00:00")
+        lbl_time.get_style_context().add_class("secondary-label")
+        title_lbl = Gtk.Label(label=os.path.basename(fpath), xalign=0.5)
+        title_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
 
         def on_play(b):
             if b.get_active():
@@ -1873,15 +1881,25 @@ class ProjectPanel(Gtk.Box):
                 lbl_time.set_text("%02d:%02d" % (pos // Gst.SECOND // 60, pos // Gst.SECOND % 60))
             return True
         timer_id = GLib.timeout_add(400, update)
-        bar = Gtk.Box(spacing=6)
-        bar.get_style_context().add_class("viewer-toolbar")
-        bar.pack_start(btn_play, False, False, 2)
-        bar.pack_start(btn_stop, False, False, 2)
-        bar.pack_start(btn_mute, False, False, 2)
-        bar.pack_start(scale, True, True, 4)
-        bar.pack_start(lbl_time, False, False, 4)
+        transport = Gtk.Box(spacing=6)
+        transport.set_halign(Gtk.Align.CENTER)
+        transport.pack_start(btn_play, False, False, 2)
+        transport.pack_start(btn_stop, False, False, 2)
+        transport.pack_start(btn_mute, False, False, 2)
+        seek = Gtk.Box(spacing=6)
+        seek.set_halign(Gtk.Align.CENTER)
+        seek.pack_start(scale, False, False, 4)
+        seek.pack_start(lbl_time, False, False, 4)
+        center = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        center.set_halign(Gtk.Align.CENTER)
+        center.set_valign(Gtk.Align.CENTER)
+        center.set_hexpand(True)
+        center.set_vexpand(True)
+        center.pack_start(title_lbl, False, False, 0)
+        center.pack_start(transport, False, False, 0)
+        center.pack_start(seek, False, False, 0)
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        vbox.pack_start(bar, False, False, 0)
+        vbox.pack_start(center, True, True, 0)
         vbox.show_all()
         self.audio_state[vbox] = (player, timer_id, bus, handler_id)
         self.make_tab(vbox, fpath, vbox)

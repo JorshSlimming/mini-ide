@@ -68,3 +68,28 @@ def global_files_action(collapsed_states):
     if states and all(not state for state in states):
         return "Hide all files"
     return "Show all files"
+
+
+def compact_bottom_visible(tree_collapsed, tabs_collapsed):
+    """Whether the compact bottom area stays visible.
+
+    Files and Terminal collapse independently: only hide the whole strip
+    when both are collapsed.
+    """
+    return not (bool(tree_collapsed) and bool(tabs_collapsed))
+
+
+def compact_main_position(total_height, tree_collapsed, tabs_collapsed):
+    """Vertical split for the compact top/bottom panes.
+
+    Returns full height when the bottom area is hidden, else the 58% split.
+    """
+    try:
+        height = int(total_height)
+    except (TypeError, ValueError):
+        return None
+    if height <= 50:
+        return None
+    if bool(tree_collapsed) and bool(tabs_collapsed):
+        return int(height)
+    return int(height * 0.58)

@@ -81,3 +81,18 @@ def test_global_files_action_predicts_next_toggle():
     assert MT.global_files_action([True, True]) == "Show all files"
     assert MT.global_files_action([False, True]) == "Show all files"
     assert MT.global_files_action([True, False, True]) == "Show all files"
+
+
+def test_compact_bottom_visible_needs_both_collapsed():
+    assert MT.compact_bottom_visible(False, False) is True
+    assert MT.compact_bottom_visible(True, False) is True
+    assert MT.compact_bottom_visible(False, True) is True
+    assert MT.compact_bottom_visible(True, True) is False
+
+
+def test_compact_main_position_keeps_single_panel():
+    assert MT.compact_main_position(1000, False, False) == 580
+    assert MT.compact_main_position(1000, True, False) == 580
+    assert MT.compact_main_position(1000, False, True) == 580
+    assert MT.compact_main_position(1000, True, True) == 1000
+    assert MT.compact_main_position(40, False, False) is None

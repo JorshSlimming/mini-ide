@@ -1,5 +1,10 @@
 /* PanelIDE — Graphite + Teal — GTK3 starter theme
    Target: Debian 13 / GTK3. Keep file-type icons from Material Icon Theme.
+
+   Button families:
+   A. chrome (header/panel/viewer controls): transparent idle, quiet hover.
+   B. regular button (dialogs/empty states): #1B2226 idle, #334047 border.
+   C. semantic/status (runner/session/destructive): state colors only.
 */
 window, box, paned, scrolledwindow, notebook {
   background-color: #0F1418;
@@ -19,7 +24,10 @@ headerbar .subtitle { color: #697780; }
 headerbar button,
 button.chrome,
 button.icon-btn,
-button.panel-toggle {
+button.panel-toggle,
+.viewer-toolbar button,
+box.terminal-actions button,
+notebook tab button {
   background: transparent;
   background-image: none;
   color: #AAB4BE;
@@ -30,26 +38,78 @@ button.panel-toggle {
   padding: 2px 7px;
   box-shadow: none;
   text-shadow: none;
+  outline: none;
+  -gtk-outline-radius: 6px;
 }
 headerbar button:hover,
 button.chrome:hover,
 button.icon-btn:hover,
-button.panel-toggle:hover {
+button.panel-toggle:hover,
+.viewer-toolbar button:hover,
+box.terminal-actions button:hover,
+notebook tab button:hover {
   background-color: #223138;
-  border-color: #26343A;
+  background-image: none;
+  border-color: #334047;
   color: #D9E0E5;
+  box-shadow: none;
+  text-shadow: none;
 }
 headerbar button:active,
 button.chrome:active,
 button.icon-btn:active,
-button.panel-toggle:active {
+button.panel-toggle:active,
+.viewer-toolbar button:active,
+box.terminal-actions button:active {
   background-color: #163D3C;
+  background-image: none;
   border-color: #00A995;
+  box-shadow: none;
+  text-shadow: none;
+}
+/* Native window controls: same chrome, subtle destructive close on hover. */
+headerbar button.titlebutton,
+headerbar button.titlebutton.minimize,
+headerbar button.titlebutton.maximize,
+headerbar button.titlebutton.close {
+  background-color: transparent;
+  background-image: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-shadow: none;
+  text-shadow: none;
+  outline: none;
+  color: #AAB4BE;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+headerbar button.titlebutton:hover {
+  background-color: #223138;
+  background-image: none;
+  border-color: #334047;
+  color: #D9E0E5;
+  box-shadow: none;
+}
+headerbar button.titlebutton:active {
+  background-color: #163D3C;
+  background-image: none;
+  border-color: #00A995;
+  box-shadow: none;
+}
+headerbar button.titlebutton.close:hover {
+  background-color: #352020;
+  background-image: none;
+  border-color: #674040;
+  color: #FFE0E0;
 }
 button.session-toggle:checked {
   background-color: #123D39;
+  background-image: none;
   border-color: #00A995;
   color: #8CF3E3;
+  box-shadow: none;
+  text-shadow: none;
 }
 button.session-toggle:checked label { color: #8CF3E3; }
 
@@ -117,37 +177,70 @@ paned > separator {
 /* Project strip for multitask. */
 .project-bar {
   background-color: #151B1F;
+  background-image: none;
   border-bottom: 1px solid #26343A;
   min-height: 30px;
   padding: 1px 5px;
 }
 .project-bar label.project-name {
-  color: #E3EAEE;
+  color: #E9EFF2;
   font-size: 12px;
   font-weight: 600;
 }
 
-/* Generic controls */
+/* B. Regular button: dialogs, empty states, isolated actions. */
 button {
-  color: #AAB4BE;
+  color: #C8D0D5;
   background-color: #1B2226;
   background-image: none;
-  border: 1px solid #26343A;
+  border: 1px solid #334047;
   border-radius: 6px;
   min-height: 28px;
   padding: 2px 8px;
   box-shadow: none;
+  text-shadow: none;
+  outline: none;
+  -gtk-outline-radius: 6px;
 }
-button:hover { background-color: #223138; color: #D9E0E5; }
-button:active { background-color: #163D3C; border-color: #00A995; }
-button:focus, entry:focus { border-color: #00A995; }
-entry {
-  background-color: #151B1F;
+button:hover {
+  background-color: #223138;
+  background-image: none;
+  border-color: #334047;
   color: #D9E0E5;
-  border: 1px solid #26343A;
+  box-shadow: none;
+  text-shadow: none;
+}
+button:active {
+  background-color: #163D3C;
+  background-image: none;
+  border-color: #00A995;
+  box-shadow: none;
+  text-shadow: none;
+}
+button:focus,
+entry:focus,
+combobox button:focus {
+  border-color: #00A995;
+  outline: none;
+  box-shadow: none;
+}
+button:disabled,
+button:disabled label {
+  color: #697780;
+}
+entry,
+combobox button.combo {
+  background-color: #151B1F;
+  background-image: none;
+  color: #D9E0E5;
+  border: 1px solid #334047;
   border-radius: 6px;
+  box-shadow: none;
+  text-shadow: none;
+  outline: none;
 }
 .dim-label { color: #697780; }
+.secondary-label { color: #91A0AA; }
 label { color: #C8D0D5; }
 
 /* Terminal / viewer support classes */
@@ -186,24 +279,51 @@ button.runner-none label { color: #9AA8B1; }
 /* Focus and media controls. */
 box.project-confirm {
   background-color: #1B2226;
+  background-image: none;
   border: 1px solid #00A995;
   border-radius: 10px;
   padding: 18px;
+  box-shadow: none;
 }
 box.project-confirm label { color: #D9E0E5; }
 eventbox.project-modal-backdrop { background-color: rgba(4, 7, 9, 0.76); }
+/* Quiet scrollbars: PanelIDE trough, compact usable slider. */
+scrollbar trough {
+  background-color: transparent;
+  background-image: none;
+  border: none;
+}
+scrollbar slider {
+  background-color: #334047;
+  background-image: none;
+  border: none;
+  border-radius: 4px;
+  min-width: 8px;
+  min-height: 24px;
+}
+scrollbar slider:hover { background-color: #46565F; }
+scrollbar button {
+  background: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  color: #697780;
+}
 scale trough {
   background-color: #26343A;
+  background-image: none;
   border-radius: 3px;
   min-height: 6px;
 }
-scale highlight { background-color: #00A995; }
+scale highlight { background-color: #00A995; background-image: none; }
 scale slider {
   background-color: #D9E0E5;
+  background-image: none;
   border: 1px solid #00A995;
   border-radius: 8px;
   min-width: 12px;
   min-height: 12px;
+  box-shadow: none;
 }
 /* Labeled chrome stays compact; status controls use semantic color. */
 button.chrome label { font-size: 11px; }
