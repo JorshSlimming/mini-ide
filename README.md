@@ -35,7 +35,7 @@ State is stored under `~/.config/panelide`. On first launch, `session.json` and 
 - Built-in image preview, CSV/TSV table viewer, PDF viewer, and audio player. PDF and audio support use optional Poppler and GStreamer components.
 - Generic embedded Harness terminal plus separate command-terminal tabs. `Ctrl+T` creates a command terminal; selecting terminal text copies it to the clipboard.
 - Session restore for projects, open files, terminal count, multitask mode, and collapsed panels.
-- Multitask view for multiple projects in one window. Each project retains its own tree, editor, terminals, and harness; the compact project headers use icon controls with tooltips.
+- Multitask view for multiple projects in one window. Each project retains its own tree, editor, terminals, and harness; compact project headers retain short labels for Files, Terminal, and runner state while universal actions remain icon-only.
 - File operations: create files/folders in the tree, rename with `F2`, delete with `Del`, drag files from the file manager to copy, and drag within the tree to move.
 - Optional GitHub self-hosted runner status and controls.
 - Dark-only Graphite + Teal GTK3 theme, matching GtkSource color scheme, SVG toolbar icons, and PanelIDE application icons. Material file-type icons are unchanged.

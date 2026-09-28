@@ -73,3 +73,11 @@ def test_split_position_equal():
 def test_split_position_small_skipped():
     assert MT.split_position(40, 1, 3) is None
     assert MT.split_position(0, 1, 2) is None
+
+
+def test_global_files_action_predicts_next_toggle():
+    assert MT.global_files_action([]) == "Show all files"
+    assert MT.global_files_action([False, False]) == "Hide all files"
+    assert MT.global_files_action([True, True]) == "Show all files"
+    assert MT.global_files_action([False, True]) == "Show all files"
+    assert MT.global_files_action([True, False, True]) == "Show all files"

@@ -1760,6 +1760,10 @@ class ProjectPanel(Gtk.Box):
             surface = _cairo.ImageSurface(_cairo.FORMAT_ARGB32,
                                           max(1, int(w * scale)), max(1, int(h * scale)))
             ctx = _cairo.Context(surface)
+            # Opaque paper background: PDFs without an explicit background
+            # stay legible on the dark PanelIDE theme.
+            ctx.set_source_rgb(1.0, 1.0, 1.0)
+            ctx.paint()
             ctx.scale(scale, scale)
             p.render(ctx)
             pb = GdkPixbuf.Pixbuf.new_from_data(
@@ -1964,8 +1968,10 @@ class ProjectPanel(Gtk.Box):
             action = "Show files" if self._tree_collapsed else "Hide files"
             if self._tree_collapsed:
                 self.tree_box.hide()
+                self.tree_box.set_no_show_all(True)
                 GLib.idle_add(lambda: self._collapse_tree(pane))
             else:
+                self.tree_box.set_no_show_all(False)
                 self.tree_box.show_all()
                 if self.layout == "compact":
                     self.root_drop.show_all()
@@ -2456,6 +2462,7 @@ class PanelIDE(Gtk.Window):
             False, "runner-btn", label="… RUNNER …")
         self.runner_btn_hb.connect("enter-notify-event",
                                    self.on_hb_runner_hover)
+        self.runner_btn_hb.set_no_show_all(True)
         self.hb.pack_end(self.runner_btn_hb)
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
@@ -2482,9 +2489,10 @@ class PanelIDE(Gtk.Window):
     def on_global_tree_toggle(self, btn):
         target = self.main_panel
         if self.mode == "multitask" and target is not None:
-            collapsed = [p._tree_collapsed for p in self.panels]
-            # Collapse only when every column is expanded; otherwise expand all.
-            make_collapsed = all(not c for c in collapsed) if collapsed else False
+            states = [p._tree_collapsed for p in self.panels]
+            # next action: collapse only when all are visible; otherwise
+            # expand everything so the label always predicts the outcome.
+            make_collapsed = bool(states) and all(not c for c in states)
             for panel in self.panels:
                 if panel._tree_collapsed != make_collapsed:
                     panel.toggle_tree()
@@ -2495,14 +2503,19 @@ class PanelIDE(Gtk.Window):
     def _sync_global_tree_button(self):
         if self.main_panel is None:
             return
-        collapsed = self.main_panel._tree_collapsed
-        if collapsed:
+        if self.mode == "multitask":
+            action = mt_ui.global_files_action(
+                [p._tree_collapsed for p in self.panels])
+            icon = ("files" if action == "Hide all files"
+                    else "files-hidden")
+        elif self.main_panel._tree_collapsed:
             icon, action = "files-hidden", "Show files"
         else:
             icon, action = "files", "Hide files"
         set_button_icon(self.btn_tree, icon)
         self.btn_tree.set_label(action)
-        self.btn_tree.set_tooltip_text(action)
+        self.btn_tree.set_tooltip_text(
+            action + (" (all projects)" if self.mode == "multitask" else ""))
     def restore_session(self):
         if not self._restore_session_enabled or not self.session_enabled:
             return False
@@ -2566,12 +2579,12 @@ class PanelIDE(Gtk.Window):
         return True
 
     def on_hb_runner_toggle(self, btn):
-        if self.main_panel is None:
+        if self.main_panel is None or self.mode == "multitask":
             return
         self.main_panel.on_runner_toggle(btn)
 
     def on_hb_runner_hover(self, btn, ev):
-        if self.main_panel is None:
+        if self.main_panel is None or self.mode == "multitask":
             return False
         return self.main_panel.on_runner_hover(btn, ev)
 
@@ -2579,9 +2592,14 @@ class PanelIDE(Gtk.Window):
         btn = getattr(self, "runner_btn_hb", None)
         if btn is None:
             return
-        if self.main_panel is None:
+        # The global badge only represents main_panel; in multitask every
+        # project already shows its own compact runner, so hide the global
+        # badge instead of implying an aggregate state.
+        if self.main_panel is None or self.mode == "multitask":
             btn.hide()
+            btn.set_no_show_all(True)
             return
+        btn.set_no_show_all(False)
         btn.show()
         self.main_panel._runner_paint(btn, compact=False)
 
@@ -3008,8 +3026,7 @@ class PanelIDE(Gtk.Window):
             title = "PanelIDE — %s" % os.path.basename(self.main_panel.root)
         self.set_title(title)
         self.hb.set_title(title)
-        if self.mode != "multitask":
-            self._sync_global_tree_button()
+        self._sync_global_tree_button()
         GLib.idle_add(self._mt_sizes)
         GLib.timeout_add(250, self._mt_sizes)
 

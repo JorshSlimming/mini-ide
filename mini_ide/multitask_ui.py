@@ -56,3 +56,15 @@ def split_position(total_px, left_count, total_count, min_per_panel=PANEL_MIN_PX
     if total <= 50 or count <= 1 or left <= 0 or left >= count:
         return None
     return int(total * left / count)
+
+
+def global_files_action(collapsed_states):
+    """Label for the global Files toggle from per-project collapsed states.
+
+    True means the project's tree is hidden. The label always predicts the
+    next action: hide only when every tree is visible, otherwise show all.
+    """
+    states = list(collapsed_states or [])
+    if states and all(not state for state in states):
+        return "Hide all files"
+    return "Show all files"

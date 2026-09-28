@@ -15,6 +15,7 @@ Launch from a checkout with `python3 panelide.py /path/to/project`, or use `pane
 - Runner controls inspect/manage configured GitHub Actions self-hosted runners; they are separate from the generic Harness terminal.
 - `PANELIDE_HARNESS` selects the embedded executable. The old `MINI_IDE_OMP` setting and `omp` default remain for migration compatibility.
 - The main header labels Open folder, Multitask, Session, and Files. Multitask project bars label Files and Terminal and keep runner state visible in a compact status badge.
+- Visual rule: universal action → icon-only is OK. PanelIDE-specific action → icon + label. Important state → color + explicit text.
 
 ## Possible future work
 

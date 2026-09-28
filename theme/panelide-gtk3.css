@@ -51,6 +51,7 @@ button.session-toggle:checked {
   border-color: #00A995;
   color: #8CF3E3;
 }
+button.session-toggle:checked label { color: #8CF3E3; }
 
 /* Tree */
 treeview {
@@ -157,13 +158,18 @@ box.terminal-actions button { min-width: 28px; min-height: 28px; padding: 1px; }
   padding: 3px 5px;
 }
 .root-drop {
-  border: 1px dashed #00A995;
-  background-color: #13201F;
+  border: 1px dashed #334047;
+  background-color: #151B1F;
   padding: 10px;
   border-radius: 6px;
   margin: 3px 4px;
 }
-.root-drop:hover { background-color: #163D3C; }
+.root-drop label { color: #91A0AA; }
+.root-drop:hover {
+  border-color: #00A995;
+  background-color: #163D3C;
+}
+.root-drop:hover label { color: #D9E0E5; }
 
 /* Runner semantics: reserve color for state, not general chrome. */
 button.runner-btn { font-weight: 600; }
@@ -172,6 +178,11 @@ button.runner-off  { color: #F58C8C; border-color: #6E3535; background-color: #2
 button.runner-busy { color: #F0C267; border-color: #755B28; background-color: #2A2418; }
 button.runner-wait { color: #7DD3FC; border-color: #2C6279; background-color: #14242C; }
 button.runner-none { color: #697780; border-color: transparent; background-color: transparent; }
+button.runner-on label { color: #72E59B; }
+button.runner-off label { color: #F58C8C; }
+button.runner-busy label { color: #F0C267; }
+button.runner-wait label { color: #7DD3FC; }
+button.runner-none label { color: #9AA8B1; }
 /* Focus and media controls. */
 box.project-confirm {
   background-color: #1B2226;
@@ -219,8 +230,10 @@ button.destructive-action {
   background-color: transparent;
   border-color: transparent;
 }
+button.destructive-action label { color: #E6A0A0; }
 button.destructive-action:hover {
   color: #FFE0E0;
   background-color: #352020;
   border-color: #674040;
 }
+button.destructive-action:hover label { color: #FFE0E0; }
