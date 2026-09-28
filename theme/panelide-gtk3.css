@@ -6,9 +6,21 @@
    B. regular button (dialogs/empty states): #1B2226 idle, #334047 border.
    C. semantic/status (runner/session/destructive): state colors only.
 */
-window, box, paned, scrolledwindow, notebook {
+window,
+paned,
+scrolledwindow,
+notebook {
   background-color: #0F1418;
   color: #D9E0E5;
+}
+
+box {
+  color: #D9E0E5;
+}
+
+headerbar box {
+  background-color: transparent;
+  background-image: none;
 }
 
 headerbar {

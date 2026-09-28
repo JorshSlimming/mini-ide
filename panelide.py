@@ -2054,6 +2054,7 @@ class ProjectPanel(Gtk.Box):
     def _collapse_tabs(self):
         try:
             if self.layout == "compact":
+                self.tabs.set_no_show_all(True)
                 self.tabs.hide()
                 w = self.bottom_h.get_allocated_width()
                 self.bottom_h.set_position(max(0, w))
@@ -2067,13 +2068,15 @@ class ProjectPanel(Gtk.Box):
 
     def _restore_tabs(self):
         try:
-            self.tabs.show_all()
             if self.layout == "compact":
+                self.tabs.set_no_show_all(False)
+                self.tabs.show_all()
                 position = self._tabs_positions.get(self.layout)
                 if position is None:
                     position = self.bottom_h.get_allocated_width() // 2
                 self.bottom_h.set_position(position)
             else:
+                self.tabs.show_all()
                 position = self._tabs_positions.get(self.layout)
                 if position is None:
                     position = 520
