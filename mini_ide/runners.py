@@ -1,8 +1,9 @@
 """GitHub self-hosted runner status and controls integrated with PanelIDE.
 
 - Descubrimiento dinámico por convención: basename de la carpeta del
-  proyecto == nombre del repo; se busca en ~/actions-runner*/.runner
-  (gitHubUrl + agentName). Casos raros van en MAP_OVERRIDE.
+  proyecto == nombre del repo; se busca en ~/actions-runners/*/.runner
+  (legacy: ~/actions-runner*/.runner) por gitHubUrl + agentName.
+  Casos raros van en MAP_OVERRIDE.
 - Sin polling: el estado se consulta on-demand (eventos, click, hover) y
   con un refresh local barato (systemctl is-active, sin red).
 - Encendido/apagado solo manual (toggle) o vía script ~/.local/bin/runners.
@@ -42,11 +43,21 @@ def runner_dirs():
     try:
         names = os.listdir(HOME)
     except OSError:
-        return out
+        names = []
     for n in sorted(names):
         d = os.path.join(HOME, n)
-        if n.startswith("actions-runner") and os.path.isfile(
-                os.path.join(d, ".runner")):
+        if (n.startswith("actions-runner")
+                and not os.path.islink(d)  # compat link -> contado abajo
+                and os.path.isfile(os.path.join(d, ".runner"))):
+            out.append(d)
+    base = os.path.join(HOME, "actions-runners")
+    try:
+        sub = os.listdir(base)
+    except OSError:
+        return out
+    for n in sorted(sub):
+        d = os.path.join(base, n)
+        if os.path.isfile(os.path.join(d, ".runner")):
             out.append(d)
     return out
 
@@ -229,7 +240,7 @@ def presentation(info, local=None, state=None, compact=False):
     if state == "none":
         root = os.path.basename(info.get("root") or "?")
         tooltip = ("%s has no configured runner.\n"
-                   "Run ./config.sh from an actions-runner-* folder, "
+                   "Run ./config.sh from a ~/actions-runners/<name> folder, "
                    "then run `runners rescan`." % root)
     elif state == "on":
         tooltip = "%s\n%s\nClick to turn off." % (

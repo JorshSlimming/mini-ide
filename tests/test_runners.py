@@ -40,11 +40,26 @@ def test_resolve_by_basename(tmp_path, monkeypatch):
     assert info["has_runner"] is True
     assert info["repo"] == "bar"
 
-
 def test_resolve_no_runner(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "HOME", str(tmp_path))
     info = R.resolve(str(tmp_path / "projects" / "nada"))
     assert info["has_runner"] is False
+
+
+def test_discover_new_layout_ignores_compat_symlink(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "HOME", str(tmp_path))
+    monkeypatch.setattr(R, "USER_SYSTEMD", str(tmp_path / "units"))
+    real = os.path.join(str(tmp_path), "actions-runners", "foo")
+    os.makedirs(real, exist_ok=True)
+    with open(os.path.join(real, ".runner"), "w",
+              encoding="utf-8-sig") as f:
+        json.dump({"gitHubUrl": "https://github.com/Acme/foo",
+                   "agentName": "foo-notebook"}, f)
+    os.symlink(os.path.join("actions-runners", "foo"),
+               os.path.join(str(tmp_path), "actions-runner-foo"))
+    found = R.discover()
+    assert list(found) == ["foo"]
+    assert found["foo"]["dir"] == real
 
 
 def test_local_state_unknown_unit():

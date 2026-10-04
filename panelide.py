@@ -557,8 +557,8 @@ class ProjectPanel(Gtk.Box):
         if not info.get("has_runner"):
             self._runner_info_dialog(
                 "No runner",
-                "%s has no configured runner.\nRun ./config.sh from an "
-                "actions-runner-* folder, then run `runners rescan`."
+                "%s has no configured runner.\nRun ./config.sh from a "
+                "~/actions-runners/<name> folder, then run `runners rescan`."
                 % os.path.basename(self.root))
             return
         if self.runner_state == "wait":
