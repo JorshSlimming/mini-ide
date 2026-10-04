@@ -9,6 +9,7 @@ from mini_ide.file_ops import (atomic_write, validate_child_name,
                                copy_dest_safe)
 from mini_ide.document import DocumentState, doc_relocator, docs_under
 from mini_ide import runners as ide_runners
+from mini_ide import docker_state as ide_docker
 from mini_ide import multitask_ui as mt_ui
 
 
@@ -205,6 +206,12 @@ class ProjectPanel(Gtk.Box):
         self.runner_state = "unknown"  # on|off|busy|none|wait|unknown
         self.runner_btn = None
         self._runner_op = False
+        # docker compose por proyecto (manual, sin sudo)
+        self.docker_info = ide_docker.resolve(self.root)
+        self.docker_state = "unknown"  # on|off|partial|none|wait|unknown
+        self.docker_btn = None
+        self._docker_op = False
+        self._docker_cts = None
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -411,6 +418,126 @@ class ProjectPanel(Gtk.Box):
                          daemon=True).start()
         return False
 
+    # ---------------- docker compose por proyecto (manual) ----------------
+    def _docker_paint(self, button=None, compact=None):
+        btn = button if button is not None else self.docker_btn
+        if btn is None:
+            return
+        if compact is None:
+            compact = self.layout == "compact"
+        state = self.docker_state
+        if state in (None, "unknown"):
+            state = None
+        state, label, cls, tip = ide_docker.presentation(
+            self.docker_info, cts=getattr(self, "_docker_cts", None),
+            state=state, compact=compact)
+        self.docker_state = state
+        context = btn.get_style_context()
+        for old in ("docker-on", "docker-off", "docker-partial",
+                    "docker-none", "docker-wait"):
+            context.remove_class(old)
+        context.add_class(cls)
+        btn.set_label(label)
+        btn.set_tooltip_text(tip)
+
+    def _docker_refresh(self, button=None):
+        """Encola refresh compose en hilo (ps ~200ms, no bloquea GTK)."""
+        import threading
+        info = self.docker_info or {}
+        if not info.get("has_docker"):
+            self.docker_state = "none"
+            try:
+                self._docker_paint(button)
+            except Exception:
+                pass
+            return False
+        if self._docker_op:
+            return False
+        self.docker_state = "wait"
+        try:
+            self._docker_paint(button)
+        except Exception:
+            pass
+        threading.Thread(target=self._docker_refresh_bg,
+                         args=(button,), daemon=True).start()
+        return False
+
+    def _docker_refresh_bg(self, button=None):
+        info = self.docker_info or {}
+        cts = ide_docker.containers(info)
+        if self._docker_op:
+            return
+        if cts is None:
+            self.docker_state = "unknown"
+            self._docker_cts = None
+        else:
+            self.docker_state = ide_docker.state_of(cts)
+            self._docker_cts = cts
+        GLib.idle_add(self._docker_display, button)
+
+    def _docker_display(self, button=None):
+        try:
+            self._docker_paint(button)
+        except Exception:
+            pass
+        window = self.get_toplevel()
+        if hasattr(window, "_hb_docker_sync"):
+            window._hb_docker_sync()
+        return False
+
+    def on_docker_toggle(self, btn):
+        import threading
+        if self._docker_op:
+            return
+        info = self.docker_info or {}
+        if not info.get("has_docker"):
+            self._runner_info_dialog(
+                "No docker",
+                "%s has no compose file.\nAdd compose.yaml "
+                "(or docker-compose.yml) at the project root."
+                % os.path.basename(self.root))
+            return
+        if self.docker_state == "wait":
+            return
+        self._docker_op = True
+        self.docker_state = "wait"
+        self._docker_paint(btn)
+        btn.set_sensitive(False)
+
+        def done_ok(kind):
+            self._docker_op = False
+            btn.set_sensitive(True)
+            if kind == "started":
+                self.docker_state = "wait"
+            else:
+                self.docker_state = "unknown"
+            GLib.idle_add(self._docker_refresh, btn)
+
+        def job_toggle():
+            try:
+                cts = ide_docker.containers(info)
+                if cts is None:
+                    GLib.idle_add(self._runner_info_dialog, "Error",
+                                  "Could not query compose for %s."
+                                  % info.get("project"))
+                    GLib.idle_add(done_ok, "error")
+                    return
+                running, _total = ide_docker.summarize(cts)
+                if running > 0:
+                    ok = ide_docker.stop(info)
+                else:
+                    ok = ide_docker.up(info)
+                if not ok:
+                    GLib.idle_add(self._runner_info_dialog, "Error",
+                                  "Docker operation failed for %s."
+                                  % info.get("project"))
+                GLib.idle_add(done_ok, "started" if ok else "error")
+            except Exception as ex:
+                print("docker toggle:", ex)
+                GLib.idle_add(done_ok, "error")
+
+        threading.Thread(target=job_toggle, daemon=True).start()
+
     def _runner_info_dialog(self, text, secondary=""):
         win = self.get_toplevel()
         dlg = Gtk.MessageDialog(
@@ -593,8 +720,15 @@ class ProjectPanel(Gtk.Box):
             self.runner_btn.connect("enter-notify-event",
                                     self.on_runner_hover)
             controls.pack_start(self.runner_btn, False, False, 0)
+            self.docker_btn = icon_button(
+                None, "Docker compose status", self.on_docker_toggle,
+                False, "docker-btn", "docker-compact", label="… WAIT")
+            self.docker_btn.set_hexpand(False)
+            controls.pack_start(self.docker_btn, False, False, 0)
             self._runner_paint()
+            self._docker_paint()
             GLib.idle_add(self._runner_refresh)
+            GLib.idle_add(self._docker_refresh)
             self._move_terminal_toggle(controls)
             self.btn_collapse.set_hexpand(False)
             center = Gtk.Box(spacing=0)
@@ -2503,12 +2637,18 @@ class PanelIDE(Gtk.Window):
                                    self.on_hb_runner_hover)
         self.runner_btn_hb.set_no_show_all(True)
         self.hb.pack_end(self.runner_btn_hb)
+        self.docker_btn_hb = icon_button(
+            None, "Docker compose status", self.on_hb_docker_toggle,
+            False, "docker-btn", label="… DOCKER …")
+        self.docker_btn_hb.set_no_show_all(True)
+        self.hb.pack_end(self.docker_btn_hb)
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
         save_recents(self.root)
         self._runner_tick_id = GLib.timeout_add_seconds(
             20, self._runner_tick)
         self._hb_runner_sync()
+        self._hb_docker_sync()
         if self._restore_session_enabled and self.session_enabled and self.session["projects"]:
             GLib.idle_add(self.restore_session)
 
@@ -2615,7 +2755,25 @@ class PanelIDE(Gtk.Window):
             self._hb_runner_sync()
         except Exception:
             pass
+        try:
+            self._docker_tick()
+        except Exception:
+            pass
         return True
+
+    def _docker_tick(self):
+        """Refresca compose por panel en hilos (no bloquea el tick)."""
+        import threading
+        for panel in list(self.panels):
+            try:
+                threading.Thread(target=panel._docker_refresh_bg,
+                                 args=(None,), daemon=True).start()
+            except Exception:
+                pass
+        try:
+            self._hb_docker_sync()
+        except Exception:
+            pass
 
     def on_hb_runner_toggle(self, btn):
         if self.main_panel is None or self.mode == "multitask":
@@ -2641,6 +2799,23 @@ class PanelIDE(Gtk.Window):
         btn.set_no_show_all(False)
         btn.show()
         self.main_panel._runner_paint(btn, compact=False)
+
+    def on_hb_docker_toggle(self, btn):
+        if self.main_panel is None or self.mode == "multitask":
+            return
+        self.main_panel.on_docker_toggle(btn)
+
+    def _hb_docker_sync(self):
+        btn = getattr(self, "docker_btn_hb", None)
+        if btn is None:
+            return
+        if self.main_panel is None or self.mode == "multitask":
+            btn.hide()
+            btn.set_no_show_all(True)
+            return
+        btn.set_no_show_all(False)
+        btn.show()
+        self.main_panel._docker_paint(btn, compact=False)
 
     def _runner_gate(self, panels, title):
         """Gate de cierre para runners activos. Misma rutina en todos
