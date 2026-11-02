@@ -2265,10 +2265,22 @@ class ProjectPanel(Gtk.Box):
         if getattr(self, "_shutdown", False):
             return False
         self.branch_btn.set_sensitive(True)
+        if ok and action == "switch":
+            self._refresh_after_branch()
         self._branch_refresh()
         if not ok:
             self._branch_error_dialog(name, message, action)
         return False
+
+    def _refresh_after_branch(self):
+        """Resync the tree immediately; do not rely only on file monitors."""
+        if self._refresh_id:
+            try:
+                GLib.source_remove(self._refresh_id)
+            except Exception:
+                pass
+            self._refresh_id = None
+        self._do_refresh()
 
     def _branch_error_dialog(self, name, message, action):
         if action == "create":

@@ -11,7 +11,7 @@ Launch from a checkout with `python3 panelide.py /path/to/project`, or use `pane
 - Project tree updates through GFileMonitor, including nested folders.
 - Text tabs autosave after 0.8 seconds; Ctrl+S saves immediately.
 - CSV/TSV tables, images, PDFs, and audio use dedicated viewers.
-- Each project tree has a local Git branch switcher next to New file/New folder. It lists local branches, marks the current one, and can create a branch from the current HEAD. Detached HEAD and uncommitted changes are surfaced in the button state/tooltip.
+- Each project tree has a local Git branch switcher next to New file/New folder. It lists local branches, marks the current one, and can create a branch from the current HEAD. Detached HEAD and uncommitted changes are surfaced in the button state/tooltip. After a successful switch the tree is rebuilt immediately instead of waiting for file-monitor events. Untracked/ignored files are not removed by Git and remain visible because the tree reflects the real working tree.
 - Multitask view maintains independent project panels and can restore projects, open files, terminal counts, and collapsed-panel state.
 - Runner controls inspect/manage configured GitHub Actions self-hosted runners; they are separate from the generic Harness terminal.
 - `PANELIDE_HARNESS` selects the embedded executable. The old `MINI_IDE_OMP` setting and `omp` default remain for migration compatibility.
