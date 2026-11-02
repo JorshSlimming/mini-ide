@@ -143,6 +143,19 @@ box.tree-toolbar {
 }
 box.tree-path { padding: 1px 0 2px 0; }
 box.tree-actions { padding-top: 2px; }
+button.branch-btn {
+  min-width: 0;
+  padding: 2px 6px;
+}
+button.branch-btn label {
+  color: #C8D0D5;
+}
+button.branch-btn:hover label {
+  color: #D9E0E5;
+}
+button.branch-btn.branch-detached label {
+  color: #F0C267;
+}
 
 /* Tabs: mostly borderless; accent line carries selection. */
 notebook { background-color: #0F1418; }
@@ -398,3 +411,61 @@ button.destructive-action:hover {
   border-color: #674040;
 }
 button.destructive-action:hover label { color: #FFE0E0; }
+
+/* Popup menus: branch selector and existing context menus. */
+menu {
+  background-color: #1B2226;
+  background-image: none;
+  border: 1px solid #334047;
+  border-radius: 6px;
+  padding: 4px;
+  color: #D9E0E5;
+  box-shadow: none;
+}
+menu menuitem {
+  background-color: transparent;
+  background-image: none;
+  color: #C8D0D5;
+  border-radius: 4px;
+  padding: 5px 10px;
+  min-height: 22px;
+}
+menu menuitem:hover {
+  background-color: #223138;
+  color: #E9EFF2;
+}
+menu menuitem:disabled { color: #697780; }
+menu menuitem:disabled:hover { background-color: transparent; }
+menu menuitem check,
+menu menuitem radio { color: #697780; }
+menu menuitem check:checked,
+menu menuitem radio:checked { color: #00D1B2; }
+menu separator {
+  background-color: #334047;
+  background-image: none;
+  min-height: 1px;
+  margin: 4px 2px;
+}
+
+/* Branch dialogs keep the app's dark surface instead of the system theme. */
+dialog.branch-dialog,
+messagedialog.branch-dialog {
+  background-color: #151B1F;
+  background-image: none;
+  color: #D9E0E5;
+}
+dialog.branch-dialog .dialog-vbox,
+dialog.branch-dialog .dialog-action-area,
+dialog.branch-dialog box,
+messagedialog.branch-dialog .dialog-vbox,
+messagedialog.branch-dialog .dialog-action-area,
+messagedialog.branch-dialog box {
+  background-color: #151B1F;
+  background-image: none;
+}
+dialog.branch-dialog label,
+messagedialog.branch-dialog label { color: #C8D0D5; }
+dialog.branch-dialog .dialog-action-area,
+messagedialog.branch-dialog .dialog-action-area {
+  border-top: 1px solid #26343A;
+}

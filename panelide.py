@@ -10,6 +10,7 @@ from mini_ide.file_ops import (atomic_write, validate_child_name,
 from mini_ide.document import DocumentState, doc_relocator, docs_under
 from mini_ide import runners as ide_runners
 from mini_ide import docker_state as ide_docker
+from mini_ide import git_state as ide_git
 from mini_ide import multitask_ui as mt_ui
 
 
@@ -212,6 +213,10 @@ class ProjectPanel(Gtk.Box):
         self.docker_btn = None
         self._docker_op = False
         self._docker_cts = None
+        # rama git del proyecto (selector local, sin red)
+        self.git_info = {"is_repo": False, "root": None, "branch": None,
+                         "head": None, "detached": False, "dirty": False}
+        self._branch_op = False
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -289,6 +294,7 @@ class ProjectPanel(Gtk.Box):
             "new-file", "New file", lambda w: self.start_new("newfile"))
         btn_newfolder = icon_button(
             "new-folder", "New folder", lambda w: self.start_new("newfolder"))
+        self.branch_btn, self.branch_lbl = self._make_branch_button()
 
         self.path_lbl = Gtk.Label(xalign=0)
         self.path_lbl.set_width_chars(12)
@@ -310,6 +316,7 @@ class ProjectPanel(Gtk.Box):
         self.row_new.get_style_context().add_class("tree-actions")
         self.row_new.pack_start(btn_newfile, False, False, 0)
         self.row_new.pack_start(btn_newfolder, False, False, 0)
+        self.row_new.pack_start(self.branch_btn, True, True, 0)
         self.tree_bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.tree_bar.get_style_context().add_class("tree-toolbar")
         self.tree_bar.pack_start(self.row_path, False, False, 0)
@@ -337,6 +344,7 @@ class ProjectPanel(Gtk.Box):
         self.set_layout(layout)
         self.populate(None, self.root, self.store)
         self.watch_path(self.root)
+        GLib.idle_add(self._branch_refresh)
 
     # ---------------- self-hosted runner (100% manual) ----------------
     def _runner_paint(self, button=None, compact=None):
@@ -2110,6 +2118,212 @@ class ProjectPanel(Gtk.Box):
         except Exception:
             pass
 
+    # ---------------- git branch switcher ----------------
+    def _make_branch_button(self):
+        btn = Gtk.Button()
+        context = btn.get_style_context()
+        context.add_class("chrome")
+        context.add_class("icon-btn")
+        context.add_class("branch-btn")
+        inner = Gtk.Box(spacing=5)
+        icon = Gtk.Image()
+        path = os.path.join(UI_ICON_DIR, "neutral", "git-branch.svg")
+        try:
+            icon.set_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                path, 16, 16, True))
+        except Exception:
+            pass
+        arrow = Gtk.Image()
+        arrow_path = os.path.join(UI_ICON_DIR, "neutral", "chevron-down.svg")
+        try:
+            arrow.set_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                arrow_path, 10, 10, True))
+        except Exception:
+            pass
+        lbl = Gtk.Label(xalign=0)
+        lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        lbl.set_max_width_chars(18)
+        inner.pack_start(icon, False, False, 0)
+        inner.pack_start(lbl, True, True, 0)
+        inner.pack_end(arrow, False, False, 0)
+        btn.add(inner)
+        btn.set_tooltip_text("Git branch")
+        btn.connect("clicked", self.on_branch_click)
+        return btn, lbl
+
+    def _branch_paint(self):
+        btn = getattr(self, "branch_btn", None)
+        if btn is None:
+            return
+        info = self.git_info or {}
+        if not info.get("is_repo"):
+            btn.set_no_show_all(True)
+            btn.hide()
+            return
+        name = ide_git.label(info)
+        self.branch_lbl.set_text(name)
+        context = btn.get_style_context()
+        context.remove_class("branch-detached")
+        if info.get("detached"):
+            context.add_class("branch-detached")
+        tip = ["Git branch: %s" % name]
+        if info.get("detached"):
+            tip.append("Detached HEAD: not on a branch.")
+        if info.get("dirty"):
+            tip.append("Tracked files have uncommitted changes.")
+        tip.append("Click to switch branch.")
+        btn.set_tooltip_text("\n".join(tip))
+        btn.set_no_show_all(False)
+        btn.show_all()
+
+    def _branch_refresh(self, *args):
+        if getattr(self, "_shutdown", False) or self._branch_op:
+            return False
+        try:
+            self.git_info = ide_git.snapshot(self.root)
+        except Exception:
+            self.git_info = {"is_repo": False}
+        self._branch_paint()
+        return False
+
+    def on_branch_click(self, btn):
+        if self._branch_op:
+            return
+        self._branch_refresh()
+        info = self.git_info or {}
+        if not info.get("is_repo"):
+            return
+        names = ide_git.branches(self.root)
+        current = info.get("branch") if not info.get("detached") else None
+        if current in names:
+            names.remove(current)
+            names.insert(0, current)
+        menu = Gtk.Menu()
+        for name in names:
+            item = Gtk.CheckMenuItem(label=name)
+            item.set_draw_as_radio(True)
+            item.set_active(name == current)
+            item.connect("activate", self._on_branch_selected, name)
+            menu.append(item)
+        if not names:
+            item = Gtk.MenuItem(label="No local branches yet")
+            item.set_sensitive(False)
+            menu.append(item)
+        menu.append(Gtk.SeparatorMenuItem())
+        item = Gtk.MenuItem(label="New branch…")
+        item.connect("activate", lambda w: self._new_branch_dialog())
+        menu.append(item)
+        item = Gtk.MenuItem(label="Refresh")
+        item.connect("activate", lambda w: self._branch_refresh())
+        menu.append(item)
+        menu.show_all()
+        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST,
+                             Gdk.Gravity.NORTH_WEST, None)
+
+    def _on_branch_selected(self, item, name):
+        info = self.git_info or {}
+        if name == info.get("branch"):
+            return
+        self._switch_branch(name)
+
+    def _switch_branch(self, name):
+        import threading
+        if self._branch_op:
+            return
+        self._branch_op = True
+        self.branch_lbl.set_text("Switching…")
+        self.branch_btn.set_sensitive(False)
+
+        def job():
+            try:
+                ok, message = ide_git.switch_branch(self.root, name)
+            except Exception as ex:
+                ok, message = False, str(ex)
+            GLib.idle_add(self._branch_done, ok, message, name, "switch")
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def _create_branch(self, name):
+        import threading
+        if self._branch_op:
+            return
+        self._branch_op = True
+        self.branch_lbl.set_text("Creating…")
+        self.branch_btn.set_sensitive(False)
+
+        def job():
+            try:
+                ok, message = ide_git.create_branch(self.root, name)
+            except Exception as ex:
+                ok, message = False, str(ex)
+            GLib.idle_add(self._branch_done, ok, message, name, "create")
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def _branch_done(self, ok, message, name, action):
+        self._branch_op = False
+        if getattr(self, "_shutdown", False):
+            return False
+        self.branch_btn.set_sensitive(True)
+        self._branch_refresh()
+        if not ok:
+            self._branch_error_dialog(name, message, action)
+        return False
+
+    def _branch_error_dialog(self, name, message, action):
+        if action == "create":
+            text = "Could not create branch “%s”" % name
+        else:
+            text = "Could not switch to “%s”" % name
+        dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
+                                message_type=Gtk.MessageType.ERROR,
+                                buttons=Gtk.ButtonsType.CLOSE,
+                                text=text)
+        dlg.get_style_context().add_class("branch-dialog")
+        dlg.format_secondary_text(
+            message or "Git returned an error without details.")
+        dlg.run()
+        dlg.destroy()
+
+    def _new_branch_dialog(self):
+        info = self.git_info or {}
+        if not info.get("is_repo"):
+            return
+        dlg = Gtk.Dialog(title="New branch",
+                         transient_for=self.get_toplevel(), modal=True)
+        dlg.get_style_context().add_class("branch-dialog")
+        dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL,
+                        "Create branch", Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        dlg.set_default_size(380, -1)
+        box = dlg.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        base = ide_git.label(info)
+        lbl = Gtk.Label(xalign=0)
+        lbl.set_markup("Create a branch from <b>%s</b>"
+                       % GLib.markup_escape_text(base))
+        box.pack_start(lbl, False, False, 0)
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("feature/my-change")
+        entry.set_activates_default(True)
+        box.pack_start(entry, False, False, 0)
+        dlg.show_all()
+        entry.grab_focus()
+        response = dlg.run()
+        name = entry.get_text().strip()
+        dlg.destroy()
+        if response != Gtk.ResponseType.OK or not name:
+            return
+        ok, message = ide_git.validate_branch_name(self.root, name)
+        if not ok:
+            self._branch_error_dialog(name, message, "create")
+            return
+        self._create_branch(name)
+
     def _remember_compact_bottom_position(self, pane):
         if self._tree_collapsed or self._tabs_collapsed:
             return
@@ -2644,6 +2858,7 @@ class PanelIDE(Gtk.Window):
         self.hb.pack_end(self.docker_btn_hb)
         self.add(self.content)
         self.connect("key-press-event", self.on_win_key)
+        self.connect("focus-in-event", self.on_window_focus)
         save_recents(self.root)
         self._runner_tick_id = GLib.timeout_add_seconds(
             20, self._runner_tick)
@@ -2652,6 +2867,12 @@ class PanelIDE(Gtk.Window):
         if self._restore_session_enabled and self.session_enabled and self.session["projects"]:
             GLib.idle_add(self.restore_session)
 
+    def on_window_focus(self, win, event):
+        # Keep branch labels truthful after external `git switch` calls
+        # made in a terminal or another window.
+        for panel in getattr(self, "panels", []):
+            panel._branch_refresh()
+        return False
 
     def on_session_toggle(self, btn):
         self.session_enabled = btn.get_active()

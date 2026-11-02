@@ -37,6 +37,7 @@ State is stored under `~/.config/panelide`. On first launch, `session.json` and 
 - Session restore for projects, open files, terminal count, multitask mode, and collapsed panels.
 - Multitask view for multiple projects in one window. Each project retains its own tree, editor, terminals, and harness; compact project headers retain short labels for Files, Terminal, and runner state while universal actions remain icon-only.
 - File operations: create files/folders in the tree, rename with `F2`, delete with `Del`, drag files from the file manager to copy, and drag within the tree to move.
+- Per-project Git branch switcher in the files toolbar: shows the current local branch and lets you switch or create branches without leaving PanelIDE.
 - Optional GitHub self-hosted runner status and controls.
 - Dark-only Graphite + Teal GTK3 theme, matching GtkSource color scheme, SVG toolbar icons, and PanelIDE application icons. Material file-type icons are unchanged.
 
