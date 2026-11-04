@@ -194,14 +194,29 @@ class DocumentStateTest(unittest.TestCase):
         self.assertFalse(self.doc.dirty)
         self.assertEqual(self.doc.saved_snap, self.snap())
 
+    def test_resolve_reload_clears_deleted_state(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.external_delete()
+        self.doc.resolve_reload()
+        self.assertFalse(self.doc.deleted)
+        self.assertFalse(self.doc.conflict)
+        self.assertFalse(self.doc.dirty)
+
     def test_resolve_keep_local_clears_conflict_and_rearms_autosave(self):
         self.doc.snapshot_from_disk()
         self.doc.mark_edited()
         self.doc.conflict = True
+        with open(self.path, "w") as f:
+            f.write("external version\n")
         self.doc.resolve_keep_local()
         self.assertFalse(self.doc.conflict)
         self.assertTrue(self.doc.dirty)
         self.assertIsNotNone(self.doc.save_timer)
+        # Acknowledge the current disk state so queued monitor events from the
+        # same external write do not reopen the conflict dialog.
+        self.assertEqual(self.doc.saved_snap, self.snap())
+        self.assertEqual(self.doc.on_disk_event(self.snap()), 'own')
 
     # --- RA-006: deleted dirty recovery ---
 
@@ -286,6 +301,63 @@ class DocumentStateTest(unittest.TestCase):
                             self.timer.source_remove, self._save_cb)
         moved = doc_relocator([doc], old, os.path.join(self.dir, "new.py"))
         self.assertNotIn(doc, moved)
+
+
+    def test_resume_autosave_rearms_dirty_document(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.cancel_autosave()
+        self.assertTrue(self.doc.resume_autosave())
+        self.assertIsNotNone(self.doc.save_timer)
+
+    def test_resume_autosave_skips_clean_conflicted_or_deleted(self):
+        self.doc.snapshot_from_disk()
+        self.assertFalse(self.doc.resume_autosave())
+
+        self.doc.mark_edited()
+        self.doc.mark_conflict()
+        self.assertFalse(self.doc.resume_autosave())
+        self.assertTrue(self.doc.conflict)
+
+        self.doc.resolve_reload()
+        self.doc.mark_edited()
+        self.doc.external_delete()
+        self.assertFalse(self.doc.resume_autosave())
+
+    def test_mark_conflict_cancels_autosave(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.mark_conflict()
+        self.assertTrue(self.doc.conflict)
+        self.assertIsNone(self.doc.save_timer)
+        self.assertEqual(self.timer.timers, {})
+
+    def test_mark_unsafe_suspends_autosave_until_explicit_resolution(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.mark_unsafe("disk could not be verified")
+
+        self.assertTrue(self.doc.unsafe)
+        self.assertTrue(self.doc.conflict)
+        self.assertIn("could not be verified", self.doc.unsafe_reason)
+        self.assertIsNone(self.doc.save_timer)
+        self.assertFalse(self.doc.resume_autosave())
+
+        self.doc.resolve_reload()
+        self.assertFalse(self.doc.unsafe)
+        self.assertFalse(self.doc.conflict)
+
+    def test_keep_local_clears_unsafe_and_rearms_autosave(self):
+        self.doc.snapshot_from_disk()
+        self.doc.mark_edited()
+        self.doc.mark_unsafe("verification failed")
+        self.doc.resolve_keep_local()
+
+        self.assertFalse(self.doc.unsafe)
+        self.assertFalse(self.doc.conflict)
+        self.assertTrue(self.doc.dirty)
+        self.assertIsNotNone(self.doc.save_timer)
+        self.assertTrue(self.doc.resume_autosave())
 
 
 if __name__ == "__main__":

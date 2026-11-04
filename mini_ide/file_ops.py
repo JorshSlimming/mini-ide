@@ -7,7 +7,9 @@ def atomic_write(path, text):
     try:
         mode = os.stat(path).st_mode & 0o777
     except OSError:
-        mode = 0o644
+        # New files stay private (0600). mkstemp already creates 0600;
+        # never widen a freshly created file by ignoring the process umask.
+        mode = 0o600
     fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), dir=d)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -22,6 +24,83 @@ def atomic_write(path, text):
         except OSError:
             pass
         raise
+
+
+class FileChangedError(OSError):
+    """The target changed after its state was inspected."""
+
+
+def file_state(path):
+    """Return ``(mtime_ns, size, mode)`` or None when the path is absent."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_mode & 0o777)
+
+
+def _write_temp(path, text, mode=None):
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), dir=d)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return tmp
+
+
+def atomic_create(path, text):
+    """Create *path* atomically, failing if it already exists.
+
+    A hard link from the temporary file gives exclusive creation without a
+    truncate-then-write window: concurrent creators either win or get
+    FileExistsError, and an existing file is never overwritten. The new
+    inode keeps mkstemp's private 0600 mode; no chmod/umask is applied.
+    """
+    tmp = _write_temp(path, text)
+    try:
+        os.link(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def atomic_write_checked(path, text, expected):
+    """Atomically replace *path* only while it still matches *expected*.
+
+    ``expected`` is the tuple returned by :func:`file_state` at the moment
+    the overwrite was confirmed. It must describe an existing target: a
+    missing/unknown state fails closed instead of creating a file with an
+    implicit mode. The state is checked again immediately before
+    ``os.replace``; the remaining verify-to-replace window is tiny but not
+    zero, so callers must treat a mismatch as an aborted save.
+    """
+    if expected is None:
+        raise FileChangedError("no existing target state to overwrite")
+    if file_state(path) != expected:
+        raise FileChangedError("file changed before the write")
+    mode = expected[2]
+    tmp = _write_temp(path, text, mode)
+    try:
+        if file_state(path) != expected:
+            raise FileChangedError("file changed during the write")
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def validate_child_name(name):

@@ -4,13 +4,17 @@ import sys, os, shutil, csv, json, subprocess, math, time
 from itertools import islice
 from mini_ide.settings import (WARN_LARGE, MAX_LARGE, MAX_PDF_PIXELS,
                                migrate_legacy_config)
-from mini_ide.file_ops import (atomic_write, validate_child_name,
+from mini_ide.file_ops import (atomic_write, atomic_create,
+                               atomic_write_checked, file_state,
+                               FileChangedError, validate_child_name,
                                create_new_file, create_new_dir, path_inside,
                                copy_dest_safe)
 from mini_ide.document import DocumentState, doc_relocator, docs_under
+from mini_ide import branch_sync as ide_branch_sync
 from mini_ide import runners as ide_runners
 from mini_ide import docker_state as ide_docker
 from mini_ide import git_state as ide_git
+from mini_ide import tree_state as ide_tree
 from mini_ide import multitask_ui as mt_ui
 
 
@@ -63,6 +67,11 @@ IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "svg", "av
 AUD_EXT = {"mp3", "ogg", "oga", "wav", "flac", "m4a", "opus", "wma", "aac", "mid", "midi"}
 CSV_EXT = {"csv", "tsv"}
 CSV_COLORS = ["#1B3433", "#1C303A", "#343222", "#33272A", "#2B2936"]
+
+# How long a Git worktree classification may be reused. The classification
+# runs in a worker thread, never on the GTK thread, and new entries force an
+# early refresh instead of waiting for this TTL.
+WORKTREE_TTL = 2.0
 
 
 def set_button_icon(button, name, size=16, semantic=False):
@@ -186,6 +195,7 @@ class ProjectPanel(Gtk.Box):
         self.on_close = on_close
         self._refresh_id = None
         self._pending = None
+        self._edit_target = None
         self.monitors = {}
         self.open_widgets = {}
         self.ed_paths = {}
@@ -215,8 +225,25 @@ class ProjectPanel(Gtk.Box):
         self._docker_cts = None
         # rama git del proyecto (selector local, sin red)
         self.git_info = {"is_repo": False, "root": None, "branch": None,
-                         "head": None, "detached": False, "dirty": False}
+                         "head": None, "detached": False, "unborn": False,
+                         "dirty": False}
         self._branch_op = False
+        self._branch_thread = None
+        self._branch_info_busy = False
+        self._branch_info_gen = 0
+        self._branch_info_pending = False
+        self._branch_info_reconcile = True
+        self._branch_names = []
+        self._branch_menu_current = None
+        self._tree_git_ready = False
+        self._worktree_state = None
+        self._worktree_state_at = 0.0
+        self._worktree_state_root = None
+        self._state_cache = {}
+        self._state_requests = set()
+        self._state_force = set()
+        self._force_state_roots = set()
+        self._nested_roots = set()
 
         self.lang_mgr = GtkSource.LanguageManager.get_default()
         self.style_mgr = GtkSource.StyleSchemeManager.get_default()
@@ -257,8 +284,8 @@ class ProjectPanel(Gtk.Box):
         tab_actions.show_all()
         self.add_command_tab()
 
-        # tree
-        self.store = Gtk.TreeStore(GdkPixbuf.Pixbuf, str, str, str)
+        # tree: icon, name, path, kind, state label, tooltip, state code
+        self.store = Gtk.TreeStore(GdkPixbuf.Pixbuf, str, str, str, str, str, str)
         self.tree = Gtk.TreeView(model=self.store)
         r_icon = Gtk.CellRendererPixbuf()
         r_name = Gtk.CellRendererText()
@@ -273,7 +300,21 @@ class ProjectPanel(Gtk.Box):
         col.add_attribute(r_icon, "pixbuf", 0)
         col.add_attribute(r_name, "text", 1)
         self.tree.append_column(col)
+        r_badge = Gtk.CellRendererText()
+        r_badge.set_property("xpad", 4)
+        r_badge.set_property("ypad", 6)
+        r_badge.set_property("xalign", 1.0)
+        self.r_badge = r_badge
+        badge_col = Gtk.TreeViewColumn("State")
+        badge_col.pack_start(r_badge, False)
+        badge_col.set_cell_data_func(r_badge, self._badge_data)
+        badge_col.set_min_width(64)
+        badge_col.set_max_width(96)
+        badge_col.set_resizable(False)
+        self.tree.append_column(badge_col)
         self.tree.set_headers_visible(False)
+        self.tree.set_has_tooltip(True)
+        self.tree.connect("query-tooltip", self.on_tree_tooltip)
         self.tree.connect("row-activated", self.on_enter)
         self.tree.connect("button-press-event", self.on_tree_btn)
         self.tree.connect("row-expanded", self.on_expand)
@@ -317,10 +358,22 @@ class ProjectPanel(Gtk.Box):
         self.row_new.pack_start(btn_newfile, False, False, 0)
         self.row_new.pack_start(btn_newfolder, False, False, 0)
         self.row_new.pack_start(self.branch_btn, True, True, 0)
+        self.local_legend = Gtk.Label(xalign=0)
+        self.local_legend.set_ellipsize(Pango.EllipsizeMode.END)
+        self.local_legend.set_text("untracked · ignored · mixed · empty = local content")
+        self.local_legend.get_style_context().add_class("secondary-label")
+        self.local_legend.set_tooltip_text(
+            "Entries marked untracked, ignored, mixed, local or empty are "
+            "not part of the current Git commit. PanelIDE shows them from "
+            "disk and keeps local files when switching branches. A repo "
+            "badge marks a nested Git repository managed by its own branch. "
+            "A ? badge means Git classification is unavailable or stale.")
+        self.local_legend.set_no_show_all(True)
         self.tree_bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.tree_bar.get_style_context().add_class("tree-toolbar")
         self.tree_bar.pack_start(self.row_path, False, False, 0)
         self.tree_bar.pack_start(self.row_new, False, False, 0)
+        self.tree_bar.pack_start(self.local_legend, False, False, 0)
 
         self.root_drop = Gtk.Box(spacing=6)
         self.root_drop.get_style_context().add_class("root-drop")
@@ -1029,18 +1082,174 @@ class ProjectPanel(Gtk.Box):
                         break
 
     # ---------------- tree ----------------
-    def populate(self, parent_iter, path, store):
-        try:
-            entries = sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower()))
-        except OSError:
+    def _badge_data(self, column, cell, model, it, data):
+        code = model.get_value(it, 6)
+        cell.set_property("text", model.get_value(it, 4))
+        colors = {
+            ide_tree.UNTRACKED: "#F0C267",
+            ide_tree.LOCAL: "#F0C267",
+            ide_tree.MIXED: "#F0C267",
+            ide_tree.IGNORED: "#91A0AA",
+            ide_tree.EMPTY: "#81909A",
+            ide_tree.NESTED: "#8CF3E3",
+            ide_tree.UNKNOWN: "#C8D0D5",
+        }
+        color = colors.get(code)
+        if color:
+            cell.set_property("foreground", color)
+            cell.set_property("foreground-set", True)
+        else:
+            cell.set_property("foreground-set", False)
+
+    def on_tree_tooltip(self, tree, x, y, keyboard_mode, tooltip):
+        info = tree.get_path_at_pos(int(x), int(y))
+        if not info:
+            return False
+        it = self.store.get_iter(info[0])
+        text = self.store.get_value(it, 5)
+        if not text:
+            return False
+        tooltip.set_text(text)
+        return True
+
+    def _set_row_state(self, store, row, status):
+        store.set(row, 4, status.label, 5, status.tooltip, 6, status.code)
+
+    def _worktree_state_for(self, root, force=False):
+        """Return cached Git classification, refreshing it in the background.
+
+        ``git ls-files`` can take seconds on large repositories, so it must
+        never run on the GTK thread. On a miss this returns the previous
+        value (or ``None``) immediately and the caller repopulates once the
+        worker applies the new state.
+        """
+        root = os.path.normpath(root)
+        if not (self.git_info or {}).get("is_repo"):
+            return None
+        cached = self._state_cache.get(root)
+        now = time.monotonic()
+        if not force and cached and now - cached[1] < WORKTREE_TTL:
+            return cached[0]
+        self._request_worktree_state(root, force=force)
+        return cached[0] if cached else None
+
+    def _request_worktree_state(self, root, force=False):
+        """Start one worker per root; coalesce repeated requests."""
+        if getattr(self, "_shutdown", False):
             return
-        for e in entries:
-            if e.name.startswith('.'):
-                continue
-            kind = "folder" if e.is_dir() else "file"
-            row = store.append(parent_iter, [icon_for(e.name, e.is_dir()), e.name, e.path, kind])
-            if e.is_dir():
-                store.append(row, [None, None, None, None])
+        root = os.path.normpath(root)
+        if root in self._state_requests:
+            if force:
+                self._state_force.add(root)
+            return
+        self._state_requests.add(root)
+
+        def worker():
+            try:
+                state = ide_git.worktree_state(root)
+            except Exception:
+                state = None
+            GLib.idle_add(self._apply_worktree_state, root, state)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_worktree_state(self, root, state):
+        """Install a worker result on the GTK thread and repopulate."""
+        if root not in self._state_requests:
+            return False
+        self._state_requests.discard(root)
+        if getattr(self, "_shutdown", False):
+            return False
+        self._state_cache[root] = (state, time.monotonic())
+        project_root = os.path.normpath(self.root)
+        if root == project_root:
+            self._worktree_state = state
+            self._worktree_state_at = time.monotonic()
+            self._worktree_state_root = root
+        force_again = root in self._state_force
+        self._state_force.discard(root)
+        if force_again:
+            self._request_worktree_state(root, force=True)
+        if not self._branch_op and (root == project_root
+                                    or root in self._nested_roots):
+            self._do_refresh()
+            if root == project_root:
+                self._branch_paint()
+        return False
+
+    def _state_owner(self, path):
+        """Repository state that classifies *path* (project or nested)."""
+        root = os.path.normpath(self.root)
+        current = os.path.normpath(path)
+        while current != root and current.startswith(root + os.sep):
+            if current in self._nested_roots:
+                return current
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+        return root
+
+    def _state_covering(self, path):
+        """Cached classification that currently covers *path*."""
+        owner = self._state_owner(path)
+        if owner == os.path.normpath(self.root):
+            return self._worktree_state
+        cached = self._state_cache.get(owner)
+        return cached[0] if cached else None
+
+    def _mark_state_dirty(self, path):
+        """Force a fresh classification for the repository owning *path*.
+
+        Forcing only the project root would leave a new file inside an
+        expanded nested repository on its stale ``?`` badge until the
+        nested cache expired and something else triggered a refresh.
+        """
+        self._force_state_roots.add(self._state_owner(path))
+
+    def _state_for_path(self, path):
+        """Use a nested repository's state when the tree enters one."""
+        current = os.path.normpath(path)
+        root = os.path.normpath(self.root)
+        while current != root and current.startswith(root + os.sep):
+            if current in self._nested_roots:
+                return self._worktree_state_for(
+                    current, force=current in self._force_state_roots)
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+        return self._worktree_state
+
+    def populate(self, parent_iter, path, store):
+        listing = ide_tree.scan_directory(path)
+        if parent_iter is not None and listing.nested:
+            nested_path = os.path.normpath(path)
+            self._nested_roots.add(nested_path)
+            status = ide_tree.classify(path, True, self._worktree_state,
+                                       nested=True)
+            self._set_row_state(store, parent_iter, status)
+        state = self._state_for_path(path)
+        tracked = state.get("tracked", ()) if state else ()
+        for e in listing.entries:
+            kind = "folder" if e.is_dir else "file"
+            empty = False
+            nested = False
+            entry_path = os.path.normpath(e.path)
+            if state and e.is_dir and entry_path not in tracked:
+                empty, nested = ide_tree.dir_metadata(e.path)
+                if nested:
+                    self._nested_roots.add(entry_path)
+            if nested:
+                status = ide_tree.classify(e.path, True, state, nested=True)
+            else:
+                status = ide_tree.classify(e.path, e.is_dir, state, empty=empty)
+            row = store.append(parent_iter, [
+                icon_for(e.name, e.is_dir), e.name, e.path, kind,
+                status.label, status.tooltip, status.code])
+            if e.is_dir:
+                store.append(row, [None, None, None, None, None, None, None])
 
     def watch_path(self, path):
         if path in self.monitors:
@@ -1054,17 +1263,38 @@ class ProjectPanel(Gtk.Box):
             pass
 
     def on_fs_changed(self, mon, file, other, event):
+        # Git rewrites many files while switching branches. Those events are
+        # reconciled once in _branch_done; handling them here would raise a
+        # conflict dialog for every intermediate write.
+        if self._branch_op:
+            return
         try:
             p = file.get_path()
         except Exception:
             p = None
         if p:
             self._handle_fs_event(p, event)
+            structural = event not in (
+                Gio.FileMonitorEvent.CHANGED,
+                Gio.FileMonitorEvent.CHANGES_DONE_HINT,
+                Gio.FileMonitorEvent.ATTRIBUTE_CHANGED)
+            if ((self.git_info or {}).get("is_repo")
+                    and (structural
+                         or ide_tree.affects_classification(p)
+                         or ide_tree.needs_reclassification(
+                             self._state_covering(p), p))):
+                # The cached classification predates this file/folder (or a
+                # delete/rename changed the tree shape). Force a fresh Git
+                # query for the repository that owns the path instead of
+                # showing a stale "?" badge indefinitely.
+                self._mark_state_dirty(p)
         if self._refresh_id:
             GLib.source_remove(self._refresh_id)
         self._refresh_id = GLib.timeout_add(350, self._do_refresh)
 
     def _handle_fs_event(self, path, event):
+        if self._branch_op:
+            return
         gone = event in (Gio.FileMonitorEvent.DELETED, Gio.FileMonitorEvent.MOVED_OUT)
         if path in self.monitors and gone:
             try:
@@ -1095,8 +1325,7 @@ class ProjectPanel(Gtk.Box):
             return
         if decision == 'conflict':
             if not doc.conflict:
-                doc.conflict = True
-                doc.cancel_autosave()
+                doc.mark_conflict()
                 self._update_tab_ui(buf)
                 self._conflict_dialog(doc)
             return
@@ -1117,16 +1346,22 @@ class ProjectPanel(Gtk.Box):
             resp = dlg.run()
             dlg.destroy()
             if resp == Gtk.ResponseType.YES:
-                self.reload_buffer(doc.buffer, doc.path)
-            elif resp == Gtk.ResponseType.NO:
+                return "reload" if self.reload_buffer(doc.buffer, doc.path) else None
+            if resp == Gtk.ResponseType.NO:
                 doc.resolve_keep_local()
                 self._update_tab_ui(doc.buffer)
+                return "keep"
         except Exception:
             pass
+        return None
 
     def reload_buffer(self, buf, path):
+        """Replace the buffer with disk content. Return success."""
         doc = self.docs.get(buf)
         strict = bool(doc and doc.strict_utf8)
+        snap_before = ide_branch_sync.disk_snapshot(path)
+        if snap_before is None:
+            return False
         try:
             if strict:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -1139,9 +1374,13 @@ class ProjectPanel(Gtk.Box):
                 with open(path, 'r', errors='replace') as f:
                     text = f.read()
             except OSError:
-                return
+                return False
         except OSError:
-            return
+            return False
+        if ide_branch_sync.disk_snapshot(path) != snap_before:
+            # The file changed while it was being read; do not install a
+            # possibly mixed snapshot into the editor.
+            return False
         self._reloading = True
         try:
             buf.set_text(text)
@@ -1150,9 +1389,23 @@ class ProjectPanel(Gtk.Box):
         if doc:
             doc.resolve_reload()
         self._update_tab_ui(buf)
+        return True
 
     def _do_refresh(self):
         self._refresh_id = None
+        if self._branch_op:
+            # Git is rewriting the working tree; _refresh_after_branch will
+            # repopulate once the operation (and reconciliation) is over.
+            return False
+        dirty_roots = tuple(self._force_state_roots)
+        self._force_state_roots.clear()
+        for state_root in dirty_roots:
+            self._worktree_state_for(state_root, force=True)
+        project_root = os.path.normpath(self.root)
+        if project_root not in dirty_roots:
+            self._worktree_state_for(self.root)
+        self._nested_roots.clear()
+        self._pending = None
         expanded = []
         it = self.store.get_iter_first()
         while it:
@@ -1197,6 +1450,9 @@ class ProjectPanel(Gtk.Box):
             it = self.store.iter_next(it)
 
     def refresh_tree(self):
+        self._worktree_state_for(self.root, force=True)
+        self._nested_roots.clear()
+        self._pending = None
         self.store.clear()
         self.populate(None, self.root, self.store)
 
@@ -1276,7 +1532,29 @@ class ProjectPanel(Gtk.Box):
         except Exception:
             pass
 
+    def _cancel_pending_creation(self):
+        """Remove the inline placeholder row and forget its pending create."""
+        self._edit_target = None
+        if not self._pending:
+            return False
+        it = self._pending[0]
+        self._pending = None
+        try:
+            if self.store.iter_is_valid(it):
+                self.store.remove(it)
+        except Exception:
+            pass
+        return True
+
     def on_name_edited(self, renderer, path_str, new_text):
+        if self._branch_op:
+            # A branch operation owns the working tree. Never materialize a
+            # pending "New file" row into a file while Git is rewriting it.
+            self._cancel_pending_creation()
+            self._branch_busy_dialog()
+            return
+        target = self._edit_target
+        self._edit_target = None
         if self._pending:
             it, kind, base = self._pending
             self._pending = None
@@ -1334,6 +1612,11 @@ class ProjectPanel(Gtk.Box):
             return
         kind = self.store.get_value(it, 3)
         fpath = self.store.get_value(it, 2)
+        if target is None or fpath != target:
+            # The row was rebuilt (for example by a branch switch) and the
+            # stale editing path now points somewhere else. Never rename a
+            # different file than the one the user started editing.
+            return
         name = validate_child_name(new_text)
         if not name or kind not in ("file", "folder"):
             if name is None:
@@ -1344,6 +1627,8 @@ class ProjectPanel(Gtk.Box):
             self.rename_path(fpath, newp)
 
     def rename_path(self, old, new):
+        if self._branch_busy():
+            return
         try:
             os.rename(old, new)
         except OSError as ex:
@@ -1356,14 +1641,9 @@ class ProjectPanel(Gtk.Box):
         self.select_path(new)
 
     def on_editing_canceled(self, renderer, path_str):
+        self._edit_target = None
         if self._pending:
-            it = self._pending[0]
-            self._pending = None
-            try:
-                if self.store.iter_is_valid(it):
-                    self.store.remove(it)
-            except Exception:
-                pass
+            self._cancel_pending_creation()
             return
         it = self.store.get_iter(path_str)
         if it and self.store.get_value(it, 3) in ("newfile", "newfolder"):
@@ -1383,20 +1663,16 @@ class ProjectPanel(Gtk.Box):
         return self.root, None
 
     def start_new(self, kind):
-        if self._pending:
-            it = self._pending[0]
-            self._pending = None
-            try:
-                if self.store.iter_is_valid(it):
-                    self.store.remove(it)
-            except Exception:
-                pass
+        if self._branch_busy():
+            return
+        self._cancel_pending_creation()
         base, parent_iter = self.selected_base()
         if parent_iter:
             self.tree.expand_row(self.store.get_path(parent_iter), False)
         icon = load_icon("file" if kind == "newfile" else "folder")
-        row = self.store.append(parent_iter, [icon, "", base, kind])
+        row = self.store.append(parent_iter, [icon, "", base, kind, "", "", ""])
         self._pending = (row, kind, base)
+        self._edit_target = base
         self.r_name.set_property("editable", True)
         col = self.tree.get_column(0)
         self.tree.set_cursor(self.store.get_path(row), col, True)
@@ -1417,7 +1693,38 @@ class ProjectPanel(Gtk.Box):
         except Exception:
             pass
 
+    def _copy_uris(self, uris, dest):
+        """Copy dropped URIs into *dest*; return True when anything ran."""
+        copied = False
+        for uri in uris:
+            try:
+                src = GLib.filename_from_uri(uri)[0]
+            except Exception:
+                continue
+            dst = os.path.join(dest, os.path.basename(src))
+            if os.path.exists(dst) or not os.path.exists(src):
+                continue
+            if not path_inside(self.root, dst):
+                self._copy_error_dialog(os.path.basename(src),
+                                        "the destination is outside the project root.")
+                continue
+            if os.path.isdir(src) and not self._copy_dest_safe(src, dst):
+                self._copy_error_dialog(os.path.basename(src))
+                continue
+            try:
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+                copied = True
+            except OSError as ex:
+                print("Copy error:", ex)
+        return copied
+
     def on_drop(self, tree, ctx, x, y, data, info, time):
+        if self._branch_busy():
+            ctx.finish(False, False, time)
+            return
         if info == 81:
             src = os.fsdecode(bytes(data.get_data())) if data else None
             dest = self._tree_drop_destination(tree, x, y)
@@ -1428,29 +1735,7 @@ class ProjectPanel(Gtk.Box):
         dest = self._tree_drop_destination(tree, x, y)
         if not dest:
             dest = self.root
-        if data and data.get_uris():
-            for uri in data.get_uris():
-                try:
-                    src = GLib.filename_from_uri(uri)[0]
-                except Exception:
-                    continue
-                dst = os.path.join(dest, os.path.basename(src))
-                if os.path.exists(dst) or not os.path.exists(src):
-                    continue
-                if not path_inside(self.root, dst):
-                    self._copy_error_dialog(os.path.basename(src),
-                                            "the destination is outside the project root.")
-                    continue
-                if os.path.isdir(src) and not self._copy_dest_safe(src, dst):
-                    self._copy_error_dialog(os.path.basename(src))
-                    continue
-                try:
-                    if os.path.isdir(src):
-                        shutil.copytree(src, dst)
-                    else:
-                        shutil.copy2(src, dst)
-                except OSError as ex:
-                    print("Copy error:", ex)
+        if data and data.get_uris() and self._copy_uris(data.get_uris(), dest):
             self._do_refresh()
         ctx.finish(True, False, time)
 
@@ -1477,6 +1762,8 @@ class ProjectPanel(Gtk.Box):
         return self.root
 
     def move_path(self, src, dest):
+        if self._branch_busy():
+            return
         src = os.path.abspath(src)
         dest = os.path.abspath(dest)
         if not path_inside(self.root, src) or not path_inside(self.root, dest):
@@ -1507,33 +1794,17 @@ class ProjectPanel(Gtk.Box):
         self.select_path(target)
 
     def on_root_drop(self, w, ctx, x, y, data, info, time):
-        if data and data.get_uris():
-            for uri in data.get_uris():
-                try:
-                    src = GLib.filename_from_uri(uri)[0]
-                except Exception:
-                    continue
-                dst = os.path.join(self.root, os.path.basename(src))
-                if os.path.exists(dst) or not os.path.exists(src):
-                    continue
-                if not path_inside(self.root, dst):
-                    self._copy_error_dialog(os.path.basename(src),
-                                            "the destination is outside the project root.")
-                    continue
-                if os.path.isdir(src) and not self._copy_dest_safe(src, dst):
-                    self._copy_error_dialog(os.path.basename(src))
-                    continue
-                try:
-                    if os.path.isdir(src):
-                        shutil.copytree(src, dst)
-                    else:
-                        shutil.copy2(src, dst)
-                except OSError as ex:
-                    print("Copy error:", ex)
+        if self._branch_busy():
+            ctx.finish(False, False, time)
+            return
+        if data and data.get_uris() and self._copy_uris(data.get_uris(),
+                                                          self.root):
             self._do_refresh()
         ctx.finish(True, False, time)
 
     def delete_selected(self):
+        if self._branch_busy():
+            return
         sel = self.tree.get_selection().get_selected()
         if not sel[1]:
             return
@@ -1578,6 +1849,10 @@ class ProjectPanel(Gtk.Box):
 
     # ---------------- visores ----------------
     def open_file(self, fpath):
+        if self._branch_busy():
+            # Git may be rewriting this file right now. Reading the
+            # intermediate bytes would show a half-checked-out document.
+            return
         ext = fpath.rsplit(".", 1)[-1].lower() if "." in os.path.basename(fpath) else ""
         if ext in CSV_EXT:
             self.open_table(fpath); return
@@ -2068,6 +2343,8 @@ class ProjectPanel(Gtk.Box):
             self.players.remove(player)
 
     def close_file_tab(self, btn, fpath, quiet=False):
+        if not quiet and self._branch_busy():
+            return
         entry = self.ed_paths.get(fpath)
         doc = self.docs.get(entry[0]) if entry else None
         if doc is not None:
@@ -2156,49 +2433,192 @@ class ProjectPanel(Gtk.Box):
         if btn is None:
             return
         info = self.git_info or {}
+        legend = getattr(self, "local_legend", None)
         if not info.get("is_repo"):
             btn.set_no_show_all(True)
             btn.hide()
+            if legend is not None:
+                legend.set_no_show_all(True)
+                legend.hide()
             return
-        name = ide_git.label(info)
+        base_name = ide_git.label(info)
+        name = base_name
+        if info.get("unborn"):
+            # The label must not imply that the branch has a commit: on an
+            # unborn HEAD the name is not a ref yet and cannot be switched
+            # back to until the first commit exists.
+            name = "%s · no commits" % base_name
         self.branch_lbl.set_text(name)
+        self.branch_lbl.set_tooltip_text(name)
         context = btn.get_style_context()
         context.remove_class("branch-detached")
         if info.get("detached"):
             context.add_class("branch-detached")
-        tip = ["Git branch: %s" % name]
+        tip = ["Git branch: %s" % base_name]
+        if info.get("unborn"):
+            tip.append("No commits yet on this branch.")
         if info.get("detached"):
             tip.append("Detached HEAD: not on a branch.")
         if info.get("dirty"):
             tip.append("Tracked files have uncommitted changes.")
+        summary = ide_tree.local_summary(self._worktree_state)
+        if summary:
+            tip.append(summary)
+        tip.append("Open editors are re-checked after switching; unsaved "
+                   "edits are never discarded without asking.")
         tip.append("Click to switch branch.")
         btn.set_tooltip_text("\n".join(tip))
         btn.set_no_show_all(False)
         btn.show_all()
+        if legend is not None:
+            legend.set_no_show_all(False)
+            legend.show()
 
-    def _branch_refresh(self, *args):
+    def _branch_refresh(self, *args, reconcile=True):
+        """Fetch branch information off the GTK thread.
+
+        ``git status`` walks the working tree and can take seconds on a
+        large repository. The worker keeps the window responsive; the
+        result is applied in one idle callback.
+        """
         if getattr(self, "_shutdown", False) or self._branch_op:
             return False
-        try:
-            self.git_info = ide_git.snapshot(self.root)
-        except Exception:
-            self.git_info = {"is_repo": False}
+        if self._branch_info_busy:
+            # A refresh requested while one is in flight must still run,
+            # otherwise a switch that finished after the snapshot would
+            # leave the old branch label on screen.
+            self._branch_info_pending = True
+            if not reconcile:
+                self._branch_info_reconcile = False
+            return False
+        self._branch_info_busy = True
+        self._branch_info_pending = False
+        self._branch_info_reconcile = reconcile
+        self._branch_info_gen += 1
+        generation = self._branch_info_gen
+
+        def worker():
+            try:
+                info = ide_git.snapshot(self.root)
+                names = (ide_git.branches(self.root)
+                         if info.get("is_repo") else [])
+            except Exception:
+                info = {"is_repo": False}
+                names = []
+            GLib.idle_add(self._apply_branch_info, generation, info,
+                          names, reconcile)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+        return False
+
+    def _invalidate_branch_info(self):
+        """Discard an in-flight branch snapshot after Git changed HEAD."""
+        self._branch_info_gen += 1
+        self._branch_info_busy = False
+        self._branch_info_pending = False
+
+    def _apply_branch_info(self, generation, info, names, reconcile):
+        if generation != self._branch_info_gen:
+            # A newer request is authoritative; this result is stale.
+            return False
+        self._branch_info_busy = False
+        if getattr(self, "_shutdown", False):
+            return False
+        if self._branch_op:
+            # The snapshot may describe a half-finished checkout. The
+            # post-operation refresh will request a fresh one.
+            self._branch_info_pending = True
+            return False
+        self._branch_names = names
+        self._apply_branch_snapshot(info, reconcile)
+        if self._branch_info_pending:
+            pending_reconcile = self._branch_info_reconcile
+            self._branch_info_pending = False
+            self._branch_refresh(reconcile=pending_reconcile)
+        return False
+
+    def _apply_branch_snapshot(self, info, reconcile=True):
+        previous = self.git_info or {}
+        self.git_info = info
+        if info.get("is_repo"):
+            branch_changed = (not previous.get("is_repo")
+                              or previous.get("branch") != info.get("branch")
+                              or previous.get("head") != info.get("head")
+                              or previous.get("unborn") != info.get("unborn"))
+            if branch_changed or self._worktree_state_root != self.root:
+                self._worktree_state_for(self.root, force=True)
+            else:
+                # Refresh through the TTL cache on focus: an external
+                # `git add`/ignore-rule edit may have changed badges even
+                # though HEAD did not move.
+                self._worktree_state_for(self.root)
+            if not self._tree_git_ready or branch_changed:
+                if (branch_changed and self._tree_git_ready and reconcile
+                        and self.docs):
+                    self._reconcile_open_docs_external()
+                self._do_refresh()
+                self._tree_git_ready = True
+        else:
+            had_state = self._worktree_state is not None
+            self._tree_git_ready = False
+            self._worktree_state = None
+            self._worktree_state_root = None
+            self._state_cache.pop(os.path.normpath(self.root), None)
+            if had_state:
+                self._do_refresh()
         self._branch_paint()
         return False
 
     def on_branch_click(self, btn):
         if self._branch_op:
             return
-        self._branch_refresh()
-        info = self.git_info or {}
+        # Only HEAD information and ref names are needed to build the menu.
+        # Skipping the dirty-status scan keeps this synchronous path cheap
+        # even on a huge working tree.
+        try:
+            info = ide_git.snapshot(self.root, check_dirty=False)
+        except Exception:
+            info = self.git_info or {}
         if not info.get("is_repo"):
             return
-        names = ide_git.branches(self.root)
+        try:
+            names = ide_git.branches(self.root)
+        except Exception:
+            names = []
+        self._branch_names = names
+        self._show_branch_menu(info)
+        # Refresh the full snapshot (including dirty state) in the
+        # background; if HEAD changed externally, this also reconciles
+        # open editors and rebuilds the tree.
+        self._branch_refresh()
+
+    def _show_branch_menu(self, info):
         current = info.get("branch") if not info.get("detached") else None
-        if current in names:
+        self._branch_menu_current = current
+        names = list(self._branch_names)
+        if current and current not in names:
+            names.insert(0, current)
+        elif current in names:
             names.remove(current)
             names.insert(0, current)
         menu = Gtk.Menu()
+        summary = ide_tree.local_summary(self._worktree_state, compact=True)
+        if summary:
+            item = Gtk.MenuItem(label=summary + " stay on disk")
+            item.set_sensitive(False)
+            menu.append(item)
+            menu.append(Gtk.SeparatorMenuItem())
+        if info.get("unborn"):
+            item = Gtk.MenuItem(
+                label="No commits yet: make the first commit or create a branch")
+            item.set_sensitive(False)
+            item.set_tooltip_text(
+                "The current name is not a Git ref until the first commit. "
+                "Creating a branch replaces this name; it cannot be "
+                "switched back to until it has a commit.")
+            menu.append(item)
+            menu.append(Gtk.SeparatorMenuItem())
         for name in names:
             item = Gtk.CheckMenuItem(label=name)
             item.set_draw_as_radio(True)
@@ -2211,94 +2631,497 @@ class ProjectPanel(Gtk.Box):
             menu.append(item)
         menu.append(Gtk.SeparatorMenuItem())
         item = Gtk.MenuItem(label="New branch…")
-        item.connect("activate", lambda w: self._new_branch_dialog())
+        item.connect("activate", lambda w: self._new_branch_dialog(info))
         menu.append(item)
         item = Gtk.MenuItem(label="Refresh")
         item.connect("activate", lambda w: self._branch_refresh())
         menu.append(item)
         menu.show_all()
-        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST,
+        menu.popup_at_widget(self.branch_btn, Gdk.Gravity.SOUTH_WEST,
                              Gdk.Gravity.NORTH_WEST, None)
 
     def _on_branch_selected(self, item, name):
-        info = self.git_info or {}
-        if name == info.get("branch"):
+        current = getattr(self, "_branch_menu_current", None)
+        if current is None:
+            current = (self.git_info or {}).get("branch")
+        if name == current:
             return
         self._switch_branch(name)
+
+    def _pause_docs_for_branch(self):
+        """Cancel autosave before Git runs; return ``(doc, path)`` pairs.
+
+        Digests are computed in the branch worker, not here: hashing every
+        open buffer on the GTK thread would freeze the window on large
+        files. Dirty buffers stay dirty: if the branch changes their file,
+        the user gets a conflict decision instead of an implicit overwrite.
+        """
+        paused = []
+        for doc in list(self.docs.values()):
+            doc.cancel_autosave()
+            paused.append((doc, doc.path))
+        return paused
+
+    def _snapshot_docs_after_branch(self, prepared):
+        """Worker-side disk snapshots/digests after Git finishes."""
+        if getattr(self, "_shutdown", False):
+            # Shutdown is waiting for this thread; do not spend time hashing
+            # large buffers when the result can no longer be applied.
+            return prepared
+        observed = []
+        for doc, path, before in prepared:
+            disk = ide_branch_sync.disk_snapshot(path)
+            after = (ide_branch_sync.file_digest(path)
+                     if disk is not None and before is not None else None)
+            observed.append((doc, path, before, disk, after))
+        return observed
+
+    def _resume_docs_after_branch(self, prepared, safe=None):
+        """Re-arm autosave only for documents explicitly verified safe.
+
+        ``safe`` is the set of buffer identities returned by
+        :meth:`_reconcile_docs_after_branch`. Anything else stays paused,
+        even if the reconciliation loop failed halfway through.
+        """
+        for item in prepared:
+            doc = item[0]
+            if self.docs.get(doc.buffer) is not doc:
+                continue
+            try:
+                if safe is not None and doc.buffer not in safe:
+                    self._update_tab_ui(doc.buffer)
+                    continue
+                doc.resume_autosave()
+                self._update_tab_ui(doc.buffer)
+            except Exception as ex:
+                # If re-arming itself fails, fail closed rather than leave
+                # a half-configured document able to write.
+                try:
+                    doc.mark_unsafe("could not re-arm autosave: %s" % ex)
+                    self._update_tab_ui(doc.buffer)
+                except Exception:
+                    pass
+
+    def _disk_text_for_doc(self, doc):
+        try:
+            if doc.strict_utf8:
+                with open(doc.path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            with open(doc.path, 'r', errors='replace') as f:
+                return f.read()
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def _reconcile_failure_dialog(self, problems):
+        """Offer explicit resolutions when disk state could not be verified."""
+        unique = []
+        seen = set()
+        for doc, reason in problems:
+            if self.docs.get(doc.buffer) is not doc:
+                continue
+            if doc.buffer in seen:
+                continue
+            seen.add(doc.buffer)
+            unique.append((doc, reason))
+        if not unique:
+            return set()
+        names = [os.path.basename(doc.path) for doc, _ in unique]
+        shown = "\n".join(names[:6])
+        if len(names) > 6:
+            shown += "\n… and %d more" % (len(names) - 6)
+        try:
+            dlg = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(), modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="Autosave paused for %d open file(s)" % len(unique),
+                secondary_text=(
+                    "Git finished, but PanelIDE could not verify the disk "
+                    "state of:\n%s\n\nAutosave stays off so an editor "
+                    "buffer cannot overwrite newer disk content. Reloading "
+                    "discards the editor version; keeping it will overwrite "
+                    "the file on the next save." % shown))
+            dlg.add_button("Keep autosave paused", Gtk.ResponseType.CANCEL)
+            dlg.add_button("Reload from disk", Gtk.ResponseType.YES)
+            keep_btn = dlg.add_button("Keep editor version",
+                                      Gtk.ResponseType.NO)
+            keep_btn.get_style_context().add_class("destructive-action")
+            dlg.set_default_response(Gtk.ResponseType.CANCEL)
+            resp = dlg.run()
+            dlg.destroy()
+        except Exception:
+            return set()
+        explicit = set()
+        for doc, _reason in unique:
+            if self.docs.get(doc.buffer) is not doc:
+                continue
+            try:
+                if resp == Gtk.ResponseType.YES:
+                    if not self.reload_buffer(doc.buffer, doc.path):
+                        doc.mark_unsafe("the file could not be read from disk")
+                        self._update_tab_ui(doc.buffer)
+                elif resp == Gtk.ResponseType.NO:
+                    # Explicit, destructive decision by the user. A clean
+                    # buffer has no divergent editor version to keep, so do
+                    # not let this choice trigger an immediate overwrite.
+                    if doc.dirty:
+                        doc.resolve_keep_local()
+                        self._update_tab_ui(doc.buffer)
+                        explicit.add(doc.buffer)
+            except Exception as ex:
+                try:
+                    doc.mark_unsafe("resolution failed: %s" % ex)
+                    self._update_tab_ui(doc.buffer)
+                except Exception:
+                    pass
+        return explicit
+
+    def _reconcile_open_docs_external(self):
+        prepared = [(doc, doc.path, None) for doc in list(self.docs.values())]
+        safe = self._reconcile_docs_after_branch(prepared)
+        self._resume_docs_after_branch(prepared, safe)
+
+    def _reconcile_docs_after_branch(self, prepared, strict=False):
+        """Reconcile open buffers after Git (or an external branch change).
+
+        Returns the set of buffer identities that were verified and may
+        safely re-arm autosave. Any exception or unverifiable read leaves
+        the document conflicted/unsafe, keeps its buffer intact, and does
+        not add it to the safe set.
+
+        ``strict`` is used after PanelIDE's own switch/create: a dirty
+        document with no pre-operation digest is not resumed automatically,
+        because there is no trustworthy baseline to detect an external
+        rewrite that happened during the operation.
+        """
+        safe = set()
+        conflicts = []
+        problems = []
+        for item in prepared:
+            doc = item[0]
+            path = item[1]
+            before = item[2]
+            try:
+                if self.docs.get(doc.buffer) is not doc:
+                    continue
+                doc.cancel_autosave()
+                if doc.path != path:
+                    reason = "the document path changed during the operation"
+                    doc.mark_unsafe(reason)
+                    self._update_tab_ui(doc.buffer)
+                    problems.append((doc, reason))
+                    continue
+
+                precomputed = len(item) >= 5
+                if precomputed:
+                    disk_after_op, after = item[3], item[4]
+                else:
+                    disk_after_op, after = None, None
+
+                # Re-stat at decision time. The worker snapshot may be
+                # older than the moment autosave would be re-armed; if the
+                # file changed in between, its digest cannot be trusted.
+                disk = ide_branch_sync.disk_snapshot(path)
+                if precomputed and disk != disk_after_op:
+                    after = None
+                    action = ide_branch_sync.reconcile_action(
+                        doc.dirty, doc.conflict, doc.deleted,
+                        disk is not None, before_digest=None,
+                        after_digest=None, snapshot_changed=True)
+                else:
+                    if not precomputed:
+                        after = (ide_branch_sync.file_digest(path)
+                                 if disk is not None and before is not None
+                                 else None)
+                    snapshot_changed = (disk is not None
+                                        and doc.saved_snap != disk)
+                    action = ide_branch_sync.reconcile_action(
+                        doc.dirty, doc.conflict, doc.deleted,
+                        disk is not None, before_digest=before,
+                        after_digest=after,
+                        snapshot_changed=snapshot_changed)
+
+                if (before is None and not doc.dirty and not doc.conflict
+                        and action in (ide_branch_sync.UNCHANGED,
+                                       ide_branch_sync.RELOAD)
+                        and disk is not None and disk[1] <= WARN_LARGE):
+                    # External switches have no pre-switch digest. Compare
+                    # text as a second guard against same-size/same-mtime
+                    # rewrites, and avoid a needless reload when Git only
+                    # touched the file. The size cap keeps this bounded.
+                    disk_text = self._disk_text_for_doc(doc)
+                    if disk_text is not None:
+                        action = (ide_branch_sync.UNCHANGED
+                                  if disk_text == self._doc_text(doc)
+                                  else ide_branch_sync.RELOAD)
+
+                if action == ide_branch_sync.UNCHANGED:
+                    if not doc.dirty and doc.saved_snap != disk:
+                        # A clean buffer whose editor baseline differs from
+                        # disk is stale even when the pre/post digests agree
+                        # (the external change predates the baseline).
+                        # Reload instead of blessing it with a new snapshot.
+                        action = ide_branch_sync.RELOAD
+                if action == ide_branch_sync.UNCHANGED:
+                    if doc.dirty:
+                        if before is None and strict:
+                            reason = ("no pre-operation content digest was "
+                                      "available for automatic verification")
+                            doc.mark_unsafe(reason)
+                            self._update_tab_ui(doc.buffer)
+                            problems.append((doc, reason))
+                            continue
+                        if doc.saved_snap != disk:
+                            # The file was already different from the
+                            # editor's last sync before the digest baseline
+                            # was taken. Digests alone would call this
+                            # "unchanged"; do not autosave over it.
+                            was_conflict = doc.conflict
+                            doc.mark_conflict()
+                            self._update_tab_ui(doc.buffer)
+                            if not was_conflict:
+                                conflicts.append(doc)
+                            continue
+                        if before is not None:
+                            current = ide_branch_sync.file_digest(path)
+                            if current is None:
+                                reason = ("the file could not be read for "
+                                          "autosave verification")
+                                doc.mark_unsafe(reason)
+                                self._update_tab_ui(doc.buffer)
+                                problems.append((doc, reason))
+                                continue
+                            if current != before:
+                                reason = ("the file changed after the branch "
+                                          "operation; autosave was not resumed")
+                                doc.mark_unsafe(reason)
+                                self._update_tab_ui(doc.buffer)
+                                problems.append((doc, reason))
+                                continue
+                    doc.saved_snap = disk
+                    safe.add(doc.buffer)
+                    self._update_tab_ui(doc.buffer)
+                elif action == ide_branch_sync.DELETED:
+                    if not doc.deleted:
+                        doc.external_delete()
+                    self._update_tab_ui(doc.buffer)
+                elif action in (ide_branch_sync.REAPPEARED_RELOAD,
+                                ide_branch_sync.REAPPEARED_CONFLICT):
+                    doc.deleted = False
+                    if action == ide_branch_sync.REAPPEARED_CONFLICT:
+                        was_conflict = doc.conflict
+                        doc.mark_conflict()
+                        self._update_tab_ui(doc.buffer)
+                        if not was_conflict:
+                            conflicts.append(doc)
+                    elif not self.reload_buffer(doc.buffer, doc.path):
+                        reason = ("the reappeared file could not be read "
+                                  "from disk")
+                        doc.mark_unsafe(reason)
+                        self._update_tab_ui(doc.buffer)
+                        problems.append((doc, reason))
+                    else:
+                        safe.add(doc.buffer)
+                elif action == ide_branch_sync.CONFLICT:
+                    was_conflict = doc.conflict
+                    doc.mark_conflict()
+                    self._update_tab_ui(doc.buffer)
+                    if not was_conflict:
+                        conflicts.append(doc)
+                elif action == ide_branch_sync.RELOAD:
+                    if not self.reload_buffer(doc.buffer, doc.path):
+                        reason = "the file could not be read from disk"
+                        doc.mark_unsafe(reason)
+                        self._update_tab_ui(doc.buffer)
+                        problems.append((doc, reason))
+                    else:
+                        safe.add(doc.buffer)
+            except Exception as ex:
+                reason = "reconciliation failed: %s" % ex
+                safe.discard(doc.buffer)
+                try:
+                    doc.cancel_autosave()
+                    doc.mark_unsafe(reason)
+                    self._update_tab_ui(doc.buffer)
+                except Exception:
+                    pass
+                problems.append((doc, reason))
+        for doc in conflicts:
+            if self._conflict_dialog(doc) == "keep":
+                # The user explicitly chose the editor version. The timer
+                # scheduled by resolve_keep_local may be cancelled while the
+                # branch operation is still marked active, so include it in
+                # the safe set for the post-operation resume.
+                safe.add(doc.buffer)
+        if problems:
+            safe.update(self._reconcile_failure_dialog(problems) or ())
+        return safe
 
     def _switch_branch(self, name):
         import threading
         if self._branch_op:
             return
+        self._cancel_pending_creation()
         self._branch_op = True
+        paused = self._pause_docs_for_branch()
         self.branch_lbl.set_text("Switching…")
         self.branch_btn.set_sensitive(False)
 
         def job():
+            prepared = [(doc, path, ide_branch_sync.file_digest(path))
+                        for doc, path in paused]
             try:
                 ok, message = ide_git.switch_branch(self.root, name)
             except Exception as ex:
                 ok, message = False, str(ex)
-            GLib.idle_add(self._branch_done, ok, message, name, "switch")
+            try:
+                prepared = self._snapshot_docs_after_branch(prepared)
+            except Exception:
+                # Keep the pre-switch tuples; reconciliation will stat the
+                # files on the GTK thread as a fallback.
+                pass
+            GLib.idle_add(self._branch_done, ok, message, name, "switch",
+                          prepared)
 
-        threading.Thread(target=job, daemon=True).start()
+        self._branch_thread = threading.Thread(target=job, daemon=True)
+        self._branch_thread.start()
 
     def _create_branch(self, name):
         import threading
         if self._branch_op:
             return
+        self._cancel_pending_creation()
         self._branch_op = True
+        paused = self._pause_docs_for_branch()
         self.branch_lbl.set_text("Creating…")
         self.branch_btn.set_sensitive(False)
 
         def job():
+            prepared = [(doc, path, ide_branch_sync.file_digest(path))
+                        for doc, path in paused]
             try:
                 ok, message = ide_git.create_branch(self.root, name)
             except Exception as ex:
                 ok, message = False, str(ex)
-            GLib.idle_add(self._branch_done, ok, message, name, "create")
+            try:
+                prepared = self._snapshot_docs_after_branch(prepared)
+            except Exception:
+                # Keep the pre-operation tuples; reconciliation will stat
+                # the files again as a fallback.
+                pass
+            GLib.idle_add(self._branch_done, ok, message, name, "create",
+                          prepared)
 
-        threading.Thread(target=job, daemon=True).start()
+        self._branch_thread = threading.Thread(target=job, daemon=True)
+        self._branch_thread.start()
 
-    def _branch_done(self, ok, message, name, action):
-        self._branch_op = False
+    def _branch_done(self, ok, message, name, action, prepared=None):
         if getattr(self, "_shutdown", False):
+            self._branch_op = False
             return False
+        prepared = list(prepared or [])
+        # A document can be opened (and edited) while Git is running. It is
+        # not in the pre-operation digest list, but it still needs its
+        # autosave suspended until it can be reconciled too.
+        known = {id(item[0]) for item in prepared}
+        for doc in list(self.docs.values()):
+            if id(doc) not in known:
+                doc.cancel_autosave()
+                prepared.append((doc, doc.path, None))
+        safe = set()
+        try:
+            if prepared:
+                # Reconcile switch and create alike: monitor events are
+                # ignored while either operation runs, so both can hide an
+                # external write or a post-checkout hook changing files.
+                safe = self._reconcile_docs_after_branch(prepared,
+                                                         strict=True)
+        except Exception as ex:
+            # Fail closed. Nothing from this batch is allowed to re-arm
+            # autosave; keep every open buffer exactly as the user left it.
+            reason = "branch reconciliation failed: %s" % ex
+            print(reason)
+            for item in prepared:
+                doc = item[0]
+                if self.docs.get(doc.buffer) is not doc:
+                    continue
+                try:
+                    doc.cancel_autosave()
+                    doc.mark_unsafe(reason)
+                    self._update_tab_ui(doc.buffer)
+                except Exception:
+                    pass
+            try:
+                safe.update(self._reconcile_failure_dialog(
+                    [(item[0], reason) for item in prepared]) or ())
+            except Exception:
+                pass
+        finally:
+            self._branch_op = False
+        self._invalidate_branch_info()
+        # Only verified documents are re-armed. Failed/conflicted docs keep
+        # autosave suspended until the user resolves them explicitly.
+        self._resume_docs_after_branch(prepared, safe)
         self.branch_btn.set_sensitive(True)
-        if ok and action == "switch":
-            self._refresh_after_branch()
-        self._branch_refresh()
+        # Refresh after switch and create alike: either can move HEAD, run
+        # checkout hooks, or leave a partial working tree after a failure.
+        self._refresh_after_branch()
         if not ok:
             self._branch_error_dialog(name, message, action)
         return False
 
     def _refresh_after_branch(self):
-        """Resync the tree immediately; do not rely only on file monitors."""
+        """Resync tree, branch label and local-content state immediately."""
         if self._refresh_id:
             try:
                 GLib.source_remove(self._refresh_id)
             except Exception:
                 pass
             self._refresh_id = None
+        # Git may have replaced files or folders anywhere in the work tree
+        # while monitor events were ignored. Do not trust any cached
+        # classification, including nested repositories.
+        self._state_cache.clear()
+        self._worktree_state = None
+        self._worktree_state_at = 0.0
+        self._worktree_state_root = None
+        self._worktree_state_for(self.root, force=True)
         self._do_refresh()
+        self._tree_git_ready = bool((self.git_info or {}).get("is_repo"))
+        self._branch_paint()
+        # The HEAD snapshot (and its status scan) runs in the background.
+        # Passing reconcile=False avoids asking twice about the same switch.
+        self._branch_refresh(reconcile=False)
 
     def _branch_error_dialog(self, name, message, action):
         if action == "create":
             text = "Could not create branch “%s”" % name
         else:
             text = "Could not switch to “%s”" % name
+        secondary = message or "Git returned an error without details."
+        low = (message or "").lower()
+        if ("would be overwritten" in low
+                or "untracked working tree files" in low
+                or "would lose untracked files" in low):
+            secondary += ("\n\nGit stopped before overwriting local files. "
+                          "Nothing was overwritten; move, commit, or stash "
+                          "those files and try again.")
+        elif action == "switch":
+            secondary += ("\n\nPanelIDE does not delete untracked or ignored "
+                          "files; the working tree is left as Git returned "
+                          "it. Git can still replace an empty folder when "
+                          "the target branch has a file at the same path.")
         dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
                                 message_type=Gtk.MessageType.ERROR,
                                 buttons=Gtk.ButtonsType.CLOSE,
                                 text=text)
         dlg.get_style_context().add_class("branch-dialog")
-        dlg.format_secondary_text(
-            message or "Git returned an error without details.")
+        dlg.format_secondary_text(secondary)
         dlg.run()
         dlg.destroy()
 
-    def _new_branch_dialog(self):
-        info = self.git_info or {}
+    def _new_branch_dialog(self, info=None):
+        info = info or (self.git_info or {})
         if not info.get("is_repo"):
             return
         dlg = Gtk.Dialog(title="New branch",
@@ -2316,9 +3139,23 @@ class ProjectPanel(Gtk.Box):
         box.set_margin_end(12)
         base = ide_git.label(info)
         lbl = Gtk.Label(xalign=0)
-        lbl.set_markup("Create a branch from <b>%s</b>"
-                       % GLib.markup_escape_text(base))
+        if info.get("unborn"):
+            lbl.set_markup(
+                "Create a branch from <b>%s</b> (no commits yet)"
+                % GLib.markup_escape_text(base))
+        else:
+            lbl.set_markup("Create a branch from <b>%s</b>"
+                           % GLib.markup_escape_text(base))
         box.pack_start(lbl, False, False, 0)
+        if info.get("unborn"):
+            note = Gtk.Label(xalign=0)
+            note.set_line_wrap(True)
+            note.get_style_context().add_class("secondary-label")
+            note.set_text(
+                "This repository has no commit yet. The current name is "
+                "not a Git ref, so it will not remain available after the "
+                "new branch is created.")
+            box.pack_start(note, False, False, 0)
         entry = Gtk.Entry()
         entry.set_placeholder_text("feature/my-change")
         entry.set_activates_default(True)
@@ -2479,14 +3316,14 @@ class ProjectPanel(Gtk.Box):
                 return 'close'
             resp = self._deleted_dialog(doc)
             if resp == Gtk.ResponseType.YES:
-                try:
-                    atomic_write(doc.path, self._doc_text(doc))
-                except OSError as ex:
-                    print("Could not recreate:", ex)
-                    return 'abort'
-                doc.recreate()
-                self.refresh_tree()
-                return 'close'
+                result = self._recreate_deleted_doc(doc)
+                if result == 'ok':
+                    return 'close'
+                if result == 'exists':
+                    resolution = self._resolve_reappeared_deleted(doc)
+                    return ('close' if resolution in ('saved', 'reloaded')
+                            else 'abort')
+                return 'abort'
             if resp == Gtk.ResponseType.NO:
                 return 'close' if self._save_as_doc(doc) else 'abort'
             if resp == Gtk.ResponseType.APPLY:
@@ -2495,23 +3332,33 @@ class ProjectPanel(Gtk.Box):
         if doc.conflict:
             resp = self._conflict_close_dialog(doc)
             if resp == Gtk.ResponseType.YES:
+                # Explicit consent: acknowledge the current disk state, then
+                # let the ordinary save re-check it immediately before write.
+                doc.resolve_keep_local()
+                self._update_tab_ui(doc.buffer)
                 if not self.save_buffer(doc.buffer):
                     return 'abort'
             elif resp == Gtk.ResponseType.NO:
-                self.reload_buffer(doc.buffer, doc.path)
+                if not self.reload_buffer(doc.buffer, doc.path):
+                    return 'abort'
             else:
                 return 'abort'
             return 'close'
         if doc.dirty:
-            if not self.save_buffer(doc.buffer):
-                resp = self._save_failed_dialog(os.path.basename(doc.path))
-                if resp == Gtk.ResponseType.YES:
-                    if not self.save_buffer(doc.buffer):
-                        return 'abort'
-                elif resp == Gtk.ResponseType.NO:
-                    return 'close'
-                else:
+            if not self._save_with_conflict_resolution(doc.buffer):
+                if doc.conflict or doc.unsafe or doc.deleted:
                     return 'abort'
+                if doc.dirty:
+                    resp = self._save_failed_dialog(os.path.basename(doc.path))
+                    if resp == Gtk.ResponseType.YES:
+                        if not self.save_buffer(doc.buffer):
+                            return 'abort'
+                    elif resp == Gtk.ResponseType.NO:
+                        return 'close'
+                    else:
+                        return 'abort'
+                else:
+                    return 'close'
         return 'close'
 
     def _deleted_dialog(self, doc):
@@ -2527,6 +3374,80 @@ class ProjectPanel(Gtk.Box):
         resp = dlg.run()
         dlg.destroy()
         return resp
+
+    def _recreate_deleted_doc(self, doc):
+        """Recreate a deleted file exclusively; never overwrite a reappearance.
+
+        Returns 'ok', 'exists' (the path reappeared; nothing was written),
+        or 'error'.
+        """
+        try:
+            atomic_create(doc.path, self._doc_text(doc))
+        except FileExistsError:
+            return 'exists'
+        except OSError as ex:
+            print("Could not recreate:", ex)
+            return 'error'
+        doc.recreate()
+        self.refresh_tree()
+        self._update_tab_ui(doc.buffer)
+        return 'ok'
+
+    def _resolve_reappeared_deleted(self, doc):
+        """Offer explicit choices after a deleted path reappears."""
+        try:
+            dlg = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(), modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="%s reappeared on disk" % os.path.basename(doc.path),
+                secondary_text="PanelIDE did not overwrite it. The editor "
+                               "buffer is still intact. Save it to another "
+                               "path, reload the disk version, or cancel.")
+            dlg.add_button("Save As…", Gtk.ResponseType.YES)
+            dlg.add_button("Reload from disk", Gtk.ResponseType.NO)
+            dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dlg.set_default_response(Gtk.ResponseType.CANCEL)
+            resp = dlg.run()
+            dlg.destroy()
+        except Exception:
+            return 'cancel'
+        if resp == Gtk.ResponseType.YES:
+            return 'saved' if self._save_as_doc(doc) else 'cancel'
+        if resp == Gtk.ResponseType.NO:
+            if self.reload_buffer(doc.buffer, doc.path):
+                return 'reloaded'
+            doc.mark_unsafe("the reappeared file could not be read from disk")
+            self._update_tab_ui(doc.buffer)
+        return 'cancel'
+
+    def _deleted_save_recovery(self, doc):
+        """Ctrl+S recovery for a deleted file; keeps the tab open."""
+        try:
+            dlg = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(), modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="%s was deleted externally" % os.path.basename(doc.path),
+                secondary_text="The editor buffer is still intact. Recreate "
+                               "the file without overwriting anything that "
+                               "reappeared, save it elsewhere, or cancel.")
+            dlg.add_button("Recreate file", Gtk.ResponseType.YES)
+            dlg.add_button("Save As…", Gtk.ResponseType.NO)
+            dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dlg.set_default_response(Gtk.ResponseType.CANCEL)
+            resp = dlg.run()
+            dlg.destroy()
+        except Exception:
+            return False
+        if resp == Gtk.ResponseType.YES:
+            result = self._recreate_deleted_doc(doc)
+            if result == 'exists':
+                self._resolve_reappeared_deleted(doc)
+            return result == 'ok'
+        if resp == Gtk.ResponseType.NO:
+            return self._save_as_doc(doc)
+        return False
 
     def _conflict_close_dialog(self, doc):
         dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True,
@@ -2555,11 +3476,50 @@ class ProjectPanel(Gtk.Box):
         dlg.destroy()
         return resp
 
+    def _save_as_race_dialog(self, path, changed):
+        try:
+            dlg = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(), modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.CLOSE,
+                text=("File changed while saving"
+                      if changed else "File appeared while saving"),
+                secondary_text=(
+                    "'%s' %s. PanelIDE did not overwrite it; the editor "
+                    "buffer is unchanged. Choose another path with Save As."
+                    % (os.path.basename(path),
+                       "changed after you confirmed the overwrite"
+                       if changed else "was created by another process")))
+            dlg.run()
+            dlg.destroy()
+        except Exception:
+            pass
+
     def _save_as_doc(self, doc):
         dlg = Gtk.FileChooserDialog(title="Save As", transient_for=self.get_toplevel(),
                                     action=Gtk.FileChooserAction.SAVE)
         dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL,
                         "Save", Gtk.ResponseType.OK)
+        dlg.set_do_overwrite_confirmation(True)
+        overwrite_states = {}
+
+        def remember_overwrite_state(chooser):
+            # Capture the target state when GTK asks for overwrite
+            # confirmation, not after the dialog closes: the file can change
+            # while that confirmation is on screen.
+            try:
+                selected = chooser.get_filename()
+                overwrite_states[selected] = file_state(selected)
+            except Exception:
+                pass
+            return Gtk.FileChooserConfirmation.CONFIRM
+
+        try:
+            dlg.connect("confirm-overwrite", remember_overwrite_state)
+        except Exception:
+            # Older GTK/the test stub may not expose this signal; the
+            # post-dialog state below remains a best-effort fallback.
+            pass
         dlg.set_current_name(os.path.basename(doc.path))
         if dlg.run() != Gtk.ResponseType.OK:
             dlg.destroy()
@@ -2568,14 +3528,31 @@ class ProjectPanel(Gtk.Box):
         dlg.destroy()
         if not new:
             return False
+        text = self._doc_text(doc)
+        # Prefer the state captured at confirmation time. If GTK did not
+        # emit the signal, fall back to the post-dialog state.
+        if new in overwrite_states:
+            expected = overwrite_states[new]
+        else:
+            expected = file_state(new)
         try:
-            atomic_write(new, self._doc_text(doc))
+            if expected is None:
+                atomic_create(new, text)
+            else:
+                atomic_write_checked(new, text, expected)
+        except FileExistsError:
+            self._save_as_race_dialog(new, changed=False)
+            return False
+        except FileChangedError:
+            self._save_as_race_dialog(new, changed=True)
+            return False
         except OSError as ex:
             print("Could not save as:", ex)
             return False
         self._migrate_doc_path(doc, new)
         doc.save_as(new)
         self._update_tab_ui(doc.buffer)
+        self.refresh_tree()
         return True
 
     def _migrate_doc_path(self, doc, new_path):
@@ -2588,6 +3565,9 @@ class ProjectPanel(Gtk.Box):
 
     def request_close(self):
         """Resolve every open document; False aborts the close."""
+        if self._branch_op:
+            self._branch_busy_dialog()
+            return False
         for doc in list(self.docs.values()):
             if self._try_close_doc(doc, doc.path) == 'abort':
                 return False
@@ -2601,14 +3581,55 @@ class ProjectPanel(Gtk.Box):
         if doc is None:
             return
         doc.mark_edited()
+        if self._branch_op:
+            # Never let a debounce timer write into a tree Git is
+            # currently switching. The reconciliation step re-arms it.
+            doc.cancel_autosave()
         self._update_tab_ui(buf)
 
     def _autosave_buffer(self, buf):
+        doc = self.docs.get(buf)
+        if doc is None:
+            return
+        if self._branch_op:
+            doc.cancel_autosave()
+            return
+        if not (doc.dirty and not doc.conflict and not doc.deleted
+                and not doc.unsafe):
+            # The timer callback must never save a clean, conflicted,
+            # deleted, or unverified buffer. Only a normal dirty document
+            # reaches the write below.
+            return
+        # Final guard: the disk may have changed after reconciliation and
+        # before the 0.8 s autosave timer. Never let an automatic write
+        # replace newer content.
+        disk = ide_branch_sync.disk_snapshot(doc.path)
+        if disk is None or disk != doc.saved_snap:
+            doc.mark_conflict()
+            self._update_tab_ui(buf)
+            self._conflict_dialog(doc)
+            return
         self.save_buffer(buf)
 
     def save_buffer(self, buf):
+        """Ordinary save: fail closed on unresolved or external changes.
+
+        This is the only low-level write used by autosave, Ctrl+S, close and
+        shutdown. Explicit overwrite decisions must first call
+        ``resolve_keep_local()`` and then come back here, so the disk
+        snapshot is acknowledged and re-checked.
+        """
         doc = self.docs.get(buf)
         if doc is None or doc.deleted:
+            return False
+        if self._branch_op:
+            return False
+        if doc.conflict or doc.unsafe:
+            return False
+        disk = ide_branch_sync.disk_snapshot(doc.path)
+        if disk is None or disk != doc.saved_snap:
+            doc.mark_conflict()
+            self._update_tab_ui(buf)
             return False
         text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         try:
@@ -2616,21 +3637,99 @@ class ProjectPanel(Gtk.Box):
         except OSError as ex:
             print("Could not save:", ex)
             doc.dirty = True
+            doc.cancel_autosave()
             self._update_tab_ui(buf)
             return False
         doc.mark_saved()
         self._update_tab_ui(buf)
         return True
 
+    def _confirm_save_conflict(self, doc):
+        """Ask before an explicit overwrite; returns True only on consent."""
+        reason = doc.unsafe_reason or (
+            "The file changed on disk after the editor last read it.")
+        try:
+            dlg = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(), modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="%s has unresolved changes" % os.path.basename(doc.path),
+                secondary_text=(
+                    "%s\n\nPanelIDE will not overwrite newer disk content "
+                    "automatically. Save the editor version only if you "
+                    "really want to replace the file." % reason))
+            dlg.add_button("Save local version", Gtk.ResponseType.YES)
+            dlg.add_button("Reload from disk", Gtk.ResponseType.NO)
+            dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dlg.set_default_response(Gtk.ResponseType.CANCEL)
+            resp = dlg.run()
+            dlg.destroy()
+        except Exception:
+            return False
+        if resp == Gtk.ResponseType.YES:
+            # Explicit consent. Acknowledge the current disk state first;
+            # save_buffer still re-checks it immediately before writing.
+            doc.resolve_keep_local()
+            self._update_tab_ui(doc.buffer)
+            return True
+        if resp == Gtk.ResponseType.NO:
+            if not self.reload_buffer(doc.buffer, doc.path):
+                doc.mark_unsafe("the file could not be read from disk")
+                self._update_tab_ui(doc.buffer)
+        return False
+
+    def _save_with_conflict_resolution(self, buf):
+        """Ordinary save, with at most one explicit conflict retry."""
+        doc = self.docs.get(buf)
+        if doc is None or doc.deleted:
+            return False
+        if doc.conflict or doc.unsafe:
+            if not self._confirm_save_conflict(doc):
+                return False
+        if self.save_buffer(buf):
+            return True
+        if doc.conflict and self._confirm_save_conflict(doc):
+            return self.save_buffer(buf)
+        return False
+
     def save_file(self, btn=None):
+        if self._branch_op:
+            self._branch_busy_dialog()
+            return
         page = self.ed_tabs.get_current_page()
         if page < 0:
             return
         widget = self.ed_tabs.get_nth_page(page)
         for path, (buf, w) in self.ed_paths.items():
             if w is widget:
-                self.save_buffer(buf)
+                doc = self.docs.get(buf)
+                if doc is not None and doc.deleted:
+                    self._deleted_save_recovery(doc)
+                    return
+                self._save_with_conflict_resolution(buf)
                 break
+
+    def _branch_busy_dialog(self):
+        try:
+            dlg = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(), modal=True,
+                message_type=Gtk.MessageType.INFO,
+                buttons=Gtk.ButtonsType.CLOSE,
+                text="Branch operation in progress",
+                secondary_text="Wait for Git to finish before saving, "
+                               "closing, or changing files. Your editor "
+                               "contents are kept.")
+            dlg.run()
+            dlg.destroy()
+        except Exception:
+            pass
+
+    def _branch_busy(self):
+        """True while Git is switching; shows the busy dialog once."""
+        if not self._branch_op:
+            return False
+        self._branch_busy_dialog()
+        return True
 
     def _update_tab_ui(self, buf):
         doc = self.docs.get(buf)
@@ -2649,6 +3748,9 @@ class ProjectPanel(Gtk.Box):
         elif doc.deleted:
             lbl.set_text(name + " ⚠")
             lbl.set_tooltip_text("Deleted externally")
+        elif doc.unsafe:
+            lbl.set_text(name + " ⚠")
+            lbl.set_tooltip_text("Autosave paused — %s" % doc.unsafe_reason)
         elif doc.conflict:
             lbl.set_text(name + " ⚠")
             lbl.set_tooltip_text("Changed externally while you have unsaved edits")
@@ -2669,6 +3771,7 @@ class ProjectPanel(Gtk.Box):
         if k == 'F2':
             sel = self.tree.get_selection().get_selected()
             if sel[1]:
+                self._edit_target = self.store.get_value(sel[1], 2)
                 self.r_name.set_property("editable", True)
                 col = self.tree.get_column(0)
                 self.tree.set_cursor(self.store.get_path(sel[1]), col, True)
@@ -2684,12 +3787,38 @@ class ProjectPanel(Gtk.Box):
         if self._shutdown:
             return
         self._shutdown = True
-        for doc in list(self.docs.values()):
-            if doc.dirty and not doc.deleted and not doc.conflict:
-                try:
-                    self.save_buffer(doc.buffer)
-                except Exception:
-                    pass
+        # A finished worker may still have its reconciliation callback queued
+        # on the GTK loop. If _branch_op is true here, that reconciliation
+        # has not run, so writing dirty buffers could overwrite files Git
+        # just changed. Fail closed instead.
+        branch_unreconciled = self._branch_op
+        thread = getattr(self, "_branch_thread", None)
+        branch_still_running = False
+        if thread is not None and thread.is_alive():
+            # A switch is allowed to run for SWITCH_TIMEOUT. Waiting only a
+            # few seconds would release autosave while Git is still
+            # rewriting files, so wait for the same budget Git has (plus a
+            # margin for the thread to notice the result).
+            try:
+                thread.join(timeout=ide_git.SWITCH_TIMEOUT + 5.0)
+            except Exception:
+                pass
+            branch_still_running = thread.is_alive()
+        self._branch_op = False
+        if not branch_still_running and not branch_unreconciled:
+            for doc in list(self.docs.values()):
+                if (doc.dirty and not doc.deleted and not doc.conflict
+                        and not doc.unsafe):
+                    try:
+                        self.save_buffer(doc.buffer)
+                    except Exception:
+                        pass
+        elif branch_still_running:
+            print("Branch operation still running during shutdown; "
+                  "unsaved buffers were not written.")
+        else:
+            print("Branch operation finished but was not reconciled before "
+                  "shutdown; unsaved buffers were not written.")
         for widget in list(self.audio_state):
             self._cleanup_audio_widget(widget)
         for mon in self.monitors.values():
@@ -2973,6 +4102,9 @@ class PanelIDE(Gtk.Window):
 
     def on_delete_event(self, w, ev):
         for panel in list(self.panels):
+            if getattr(panel, "_branch_op", False):
+                panel._branch_busy_dialog()
+                return True
             if not panel.request_close():
                 return True
         if not self._runner_gate(list(self.panels), "Close PanelIDE"):
@@ -3285,6 +4417,9 @@ class PanelIDE(Gtk.Window):
             if resp != Gtk.ResponseType.ACCEPT:
                 return
             for p in extra:
+                if getattr(p, "_branch_op", False):
+                    p._branch_busy_dialog()
+                    return
                 if not p.request_close():
                     return
             if not self._runner_gate(extra, "Exit multitask"):
@@ -3424,6 +4559,9 @@ class PanelIDE(Gtk.Window):
 
     def close_panel(self, panel):
         if panel not in self.panels:
+            return
+        if getattr(panel, "_branch_op", False):
+            panel._branch_busy_dialog()
             return
         if not self._confirm_panel_close(panel):
             return

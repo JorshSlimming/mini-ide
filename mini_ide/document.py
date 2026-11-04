@@ -17,6 +17,8 @@ class DocumentState:
         self.dirty = False
         self.conflict = False
         self.deleted = False
+        self.unsafe = False
+        self.unsafe_reason = ""
         self.saved_snap = None
         self.save_timer = None
         self.strict_utf8 = strict_utf8
@@ -60,22 +62,67 @@ class DocumentState:
             self._remove(self.save_timer)
             self.save_timer = None
 
+    def resume_autosave(self):
+        """Re-arm autosave after an external operation paused it.
+
+        Returns True only when the document is still safe to autosave.
+        """
+        if (self.dirty and not self.conflict and not self.deleted
+                and not self.unsafe):
+            self.schedule_autosave(800)
+            return True
+        return False
+
+    def mark_conflict(self):
+        """Record an external change that must not be resolved implicitly."""
+        self.conflict = True
+        self.unsafe = False
+        self.unsafe_reason = ""
+        self.cancel_autosave()
+
+    def mark_unsafe(self, reason):
+        """Pause autosave because the disk state could not be verified.
+
+        The buffer is deliberately preserved and never written implicitly.
+        Only an explicit reload or keep-local decision clears this state.
+        """
+        self.mark_conflict()
+        self.unsafe = True
+        self.unsafe_reason = reason or "the disk state could not be verified"
+
+    def clear_unsafe(self):
+        """Forget a verification failure after an explicit decision."""
+        self.unsafe = False
+        self.unsafe_reason = ""
+
     def mark_saved(self):
         """Record a successful save of this buffer."""
         self.dirty = False
         self.conflict = False
+        self.clear_unsafe()
+        self.cancel_autosave()
         self.snapshot_from_disk()
 
     def resolve_reload(self):
         """Explicit resolution: content was reloaded from disk."""
         self.dirty = False
         self.conflict = False
+        self.deleted = False
+        self.clear_unsafe()
+        self.cancel_autosave()
         self.snapshot_from_disk()
 
     def resolve_keep_local(self):
-        """Explicit resolution: the user keeps the editor version."""
+        """Explicit resolution: the user keeps the editor version.
+
+        The current disk snapshot is acknowledged so queued monitor events
+        from the same external write do not reopen the conflict dialog.
+        Autosave still runs and replaces that content with the buffer.
+        """
         self.conflict = False
-        if not self.deleted:
+        self.clear_unsafe()
+        self.snapshot_from_disk()
+        if self.dirty and not self.deleted:
             self.schedule_autosave(800)
 
     def external_delete(self):

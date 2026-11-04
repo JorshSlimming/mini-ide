@@ -1,9 +1,11 @@
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -41,6 +43,22 @@ class AtomicWriteTest(unittest.TestCase):
         leftovers = [f for f in os.listdir(self.dir) if f.startswith(".a.txt.")]
         self.assertEqual(leftovers, [])
 
+    def test_new_file_uses_private_mode(self):
+        p = os.path.join(self.dir, "secret.env")
+        file_ops.atomic_write(p, "TOKEN=1\n")
+        self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+
+    def test_chmod_failure_does_not_create_target(self):
+        p = os.path.join(self.dir, "secret.env")
+        with mock.patch.object(file_ops.os, "chmod",
+                               side_effect=OSError("chmod failed")):
+            with self.assertRaises(OSError):
+                file_ops.atomic_write(p, "TOKEN=1\n")
+        self.assertFalse(os.path.exists(p))
+        leftovers = [f for f in os.listdir(self.dir)
+                     if f.startswith(".secret.env.")]
+        self.assertEqual(leftovers, [])
+
     def test_failed_write_cleans_temp(self):
         p = os.path.join(self.dir, "a.txt")
         file_ops.atomic_write(p, "keep")
@@ -49,6 +67,132 @@ class AtomicWriteTest(unittest.TestCase):
         leftovers = [f for f in os.listdir(self.dir) if f.startswith(".a.txt.")]
         self.assertEqual(leftovers, [])
         self.assertEqual(open(p).read(), "keep")
+
+
+class AtomicCreateTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_creates_new_file(self):
+        p = os.path.join(self.dir, "new.txt")
+        file_ops.atomic_create(p, "hola")
+        self.assertEqual(open(p).read(), "hola")
+
+    def test_new_file_is_private_even_with_permissive_umask(self):
+        p = os.path.join(self.dir, "secret.env")
+        file_ops.atomic_create(p, "TOKEN=1\n")
+        self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+
+    def test_new_file_is_private_with_umask_077_in_subprocess(self):
+        p = os.path.join(self.dir, "secret.env")
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        code = (
+            "import os, sys\n"
+            "sys.path.insert(0, %r)\n"
+            "os.umask(0o077)\n"
+            "from mini_ide import file_ops\n"
+            "file_ops.atomic_create(%r, 'TOKEN=1\\n')\n"
+            "print(oct(os.stat(%r).st_mode & 0o777))\n"
+            % (root, p, p))
+        result = subprocess.run(
+            [sys.executable, "-c", code], cwd=root, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(result.stdout.strip(), "0o600")
+
+    def test_existing_file_is_not_overwritten(self):
+        p = os.path.join(self.dir, "new.txt")
+        with open(p, "w") as f:
+            f.write("precious")
+        with self.assertRaises(FileExistsError):
+            file_ops.atomic_create(p, "replacement")
+        self.assertEqual(open(p).read(), "precious")
+
+    def test_no_temp_files_left(self):
+        p = os.path.join(self.dir, "new.txt")
+        file_ops.atomic_create(p, "x")
+        leftovers = [f for f in os.listdir(self.dir)
+                     if f.startswith(".new.txt.")]
+        self.assertEqual(leftovers, [])
+
+
+class AtomicWriteCheckedTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_replaces_only_matching_state(self):
+        p = os.path.join(self.dir, "a.txt")
+        with open(p, "w") as f:
+            f.write("v1")
+        expected = file_ops.file_state(p)
+
+        file_ops.atomic_write_checked(p, "v2", expected)
+
+        self.assertEqual(open(p).read(), "v2")
+
+    def test_changed_target_is_preserved(self):
+        p = os.path.join(self.dir, "a.txt")
+        with open(p, "w") as f:
+            f.write("v1")
+        expected = file_ops.file_state(p)
+        with open(p, "w") as f:
+            f.write("newer")
+
+        with self.assertRaises(file_ops.FileChangedError):
+            file_ops.atomic_write_checked(p, "old-buffer", expected)
+
+        self.assertEqual(open(p).read(), "newer")
+
+    def test_missing_target_is_not_created(self):
+        p = os.path.join(self.dir, "missing.txt")
+        expected = (1, 2, 0o644)
+
+        with self.assertRaises(file_ops.FileChangedError):
+            file_ops.atomic_write_checked(p, "x", expected)
+
+        self.assertFalse(os.path.exists(p))
+
+    def test_unknown_target_state_fails_closed(self):
+        p = os.path.join(self.dir, "missing.txt")
+
+        with self.assertRaises(file_ops.FileChangedError):
+            file_ops.atomic_write_checked(p, "x", None)
+
+        self.assertFalse(os.path.exists(p))
+        leftovers = [f for f in os.listdir(self.dir)
+                     if f.startswith(".missing.txt.")]
+        self.assertEqual(leftovers, [])
+
+    def test_preserves_target_mode(self):
+        p = os.path.join(self.dir, "secret.env")
+        with open(p, "w") as f:
+            f.write("old")
+        os.chmod(p, 0o600)
+        expected = file_ops.file_state(p)
+
+        file_ops.atomic_write_checked(p, "new", expected)
+
+        self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+
+    def test_chmod_failure_preserves_existing_target(self):
+        p = os.path.join(self.dir, "secret.env")
+        with open(p, "w") as f:
+            f.write("old")
+        os.chmod(p, 0o600)
+        expected = file_ops.file_state(p)
+
+        with mock.patch.object(file_ops.os, "chmod",
+                               side_effect=OSError("chmod failed")):
+            with self.assertRaises(OSError):
+                file_ops.atomic_write_checked(p, "new", expected)
+
+        self.assertEqual(open(p).read(), "old")
+        self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
 
 
 class ValidateChildNameTest(unittest.TestCase):
@@ -153,7 +297,6 @@ class CopyDestSafeTest(unittest.TestCase):
 
     def test_symlink_loop_rejected(self):
         a = os.path.join(self.dir, "a")
-        b = os.path.join(self.dir, "b")
         os.makedirs(a)
         os.symlink(a, os.path.join(a, "back"))
         self.assertFalse(file_ops.copy_dest_safe(a, os.path.join(a, "back", "a")))

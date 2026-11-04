@@ -37,7 +37,7 @@ State is stored under `~/.config/panelide`. On first launch, `session.json` and 
 - Session restore for projects, open files, terminal count, multitask mode, and collapsed panels.
 - Multitask view for multiple projects in one window. Each project retains its own tree, editor, terminals, and harness; compact project headers retain short labels for Files, Terminal, and runner state while universal actions remain icon-only.
 - File operations: create files/folders in the tree, rename with `F2`, delete with `Del`, drag files from the file manager to copy, and drag within the tree to move.
-- Per-project Git branch switcher in the files toolbar: shows the current local branch and lets you switch or create branches without leaving PanelIDE. Untracked and ignored files stay in the working tree after a switch, as Git does.
+- Per-project Git branch switcher in the files toolbar: shows the current local branch and lets you switch or create branches without leaving PanelIDE. Detached HEAD and unborn branches are labeled explicitly; the tree shows dotfiles (except VCS metadata) and badges untracked, ignored, mixed, empty, and nested-repository entries, so local-only content is explicit. Untracked/ignored counts are item counts (a wholly local folder counts as one). Switching uses Git's overwrite protection for untracked and ignored files; open editors pause autosave, then reload clean buffers or ask before replacing unsaved edits. Switch and create reconcile alike, re-stat every open file at decision time, and resume autosave only for verified buffers; failed verification keeps the buffer intact and offers keep-paused/reload/explicit-overwrite. Autosave never writes clean, conflicted, or unsafe buffers, and Ctrl+S rechecks the disk and asks before overwriting an unresolved conflict. Ctrl+S on a deleted file offers safe recovery; recreate uses exclusive atomic creation, and Save As uses overwrite confirmation plus state-checked atomic replacement. New files created this way stay private (0600), while overwriting an existing file preserves its mode. Full branch status and worktree inspection run in background workers; opening the branch menu only reads HEAD and local refs, so a very large repository does not freeze the window.
 - Optional GitHub self-hosted runner status and controls.
 - Dark-only Graphite + Teal GTK3 theme, matching GtkSource color scheme, SVG toolbar icons, and PanelIDE application icons. Material file-type icons are unchanged.
 
@@ -67,7 +67,7 @@ Run the headless suite with:
 python3 -m pytest -q
 ```
 
-The suite covers file/document safety, autosave and external-change handling, runner state, multitask layout calculations, and legacy-config migration. GUI startup and GTK rendering require a display.
+The suite covers file/document safety, autosave and external-change handling, branch-switch reconciliation and GTK-side operation guards, worktree/tree classification, runner state, multitask layout calculations, and legacy-config migration. GUI startup and GTK rendering require a display.
 
 ## Optional CPU profile helper
 
